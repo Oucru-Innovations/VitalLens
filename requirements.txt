@@ -1,0 +1,28 @@
+# === Core ===
+paddleocr
+paddlex
+paddlepaddle
+
+# === Xử lý ảnh / DICOM ===
+pydicom
+pylibjpeg
+pylibjpeg-libjpeg
+gdcm
+numpy
+Pillow
+
+# === PDF ===
+pypdfium2
+
+# === Excel ===
+openpyxl
+
+# === SFTP ===
+paramiko
+
+# === Config / Upload ===
+python-dotenv
+requests
+
+# === Build ===
+pyinstaller
