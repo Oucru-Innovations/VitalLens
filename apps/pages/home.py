@@ -27,8 +27,8 @@ class HomePage(tk.Frame):
 
         from apps.pages.xml_page import XMLToExcelPage
         from apps.pages.xray_page import XRayPage
-        from apps.pages.ocr_page import OCRPage
-        from apps.pages.upload_pdf_page import UploadPDFPage
+        from apps.pages.ocr import OCRPage
+        from apps.pages.upload import UploadPDFPage
 
         btn_data = [
             ("Xử lý XML → Excel", "Giải mã & xuất dữ liệu XML4 thành file Excel",

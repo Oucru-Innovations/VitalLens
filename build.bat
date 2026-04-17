@@ -28,5 +28,20 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [OK] Build completed: dist\VitalLens
+rem --- Copy file cau hinh runtime canh EXE ---
+rem VitalLens luc chay EXE se doc .env (hoac env) o CUNG thu muc voi
+rem VitalLens.exe. Copy tu dong de EXE ban giao chay duoc ngay.
+set "DIST_DIR=dist\VitalLens"
+if exist ".env" (
+    copy /Y ".env" "%DIST_DIR%\.env" >nul
+    echo [OK] Copied .env to %DIST_DIR%\.env
+) else if exist "env" (
+    copy /Y "env" "%DIST_DIR%\.env" >nul
+    echo [OK] Copied env to %DIST_DIR%\.env
+) else (
+    echo [WARN] Khong thay .env / env - EXE se khong co API_UPLOAD_URL.
+    echo [WARN] Hay copy .env vao %DIST_DIR%\ truoc khi ban giao.
+)
+
+echo [OK] Build completed: %DIST_DIR%
 exit /b 0

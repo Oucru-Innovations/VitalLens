@@ -7,8 +7,8 @@ from apps.config import APP_DIR, BG_MAIN
 from apps.pages.home import HomePage
 from apps.pages.xml_page import XMLToExcelPage
 from apps.pages.xray_page import XRayPage
-from apps.pages.ocr_page import OCRPage
-from apps.pages.upload_pdf_page import UploadPDFPage
+from apps.pages.ocr import OCRPage
+from apps.pages.upload import UploadPDFPage
 
 
 class App(tk.Tk):
