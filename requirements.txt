@@ -1,9 +1,9 @@
-# === Core ===
+# === PaddlePaddle / OCR ===
 paddleocr
 paddlex
 paddlepaddle
 
-# === Xử lý ảnh / DICOM ===
+# === Image / DICOM ===
 pydicom
 pylibjpeg
 pylibjpeg-libjpeg

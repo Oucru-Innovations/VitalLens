@@ -1,4 +1,4 @@
-"""Xử lý ảnh X-Quang: OCR xóa text burned-in, anonymize DICOM metadata."""
+"""X-Ray image processing: OCR text removal + DICOM metadata anonymization."""
 
 import os
 import sys
@@ -15,6 +15,17 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
 _ocr = None
 _ocr_lock = threading.Lock()
 
+# ── Text detection + validation thresholds ────────────────────────────
+# Strategy: detection model finds candidate regions, recognition model
+# VALIDATES which ones are real text. Only confirmed text gets erased.
+#
+# This prevents erasing non-text artifacts (edges, lines, noise) that
+# the detection model may flag as text-like.
+OCR_DET_SCORE_THRESHOLD: float = 0.8   # Detection confidence (candidate regions)
+OCR_REC_SCORE_THRESHOLD: float = 0.8   # Recognition confidence (text validation)
+OCR_MIN_TEXT_LENGTH: int = 2            # Skip results with fewer characters
+OCR_MIN_BBOX_AREA: int = 100           # Skip tiny detections (width*height px)
+
 DICOM_PATIENT_TAGS = [
     "PatientName", "PatientID", "PatientBirthDate", "PatientSex",
     "PatientAge", "PatientWeight", "PatientAddress",
@@ -27,6 +38,7 @@ DICOM_PATIENT_TAGS = [
 
 
 def _plan_output_paths(image_files, output_dir):
+    """Pre-compute output paths for all files, handling name collisions."""
     indexed_files = list(enumerate(image_files, start=1))
     base_names = {}
     collisions = Counter()
@@ -53,7 +65,7 @@ def _plan_output_paths(image_files, output_dir):
 
 
 def anonymize_dicom(ds):
-    """Xóa thông tin bệnh nhân khỏi metadata DICOM."""
+    """Remove patient information from DICOM metadata."""
     for tag_name in DICOM_PATIENT_TAGS:
         if hasattr(ds, tag_name):
             try:
@@ -67,7 +79,7 @@ def anonymize_dicom(ds):
 
 
 def _save_clean_dicom(ds, raw_pixels, bboxes, output_path):
-    """Anonymize metadata. Nếu có bboxes thì xóa text trên pixel."""
+    """Anonymize metadata and optionally erase text regions from pixels."""
     from pydicom.uid import ExplicitVRLittleEndian
 
     anonymize_dicom(ds)
@@ -83,7 +95,7 @@ def _save_clean_dicom(ds, raw_pixels, bboxes, output_path):
 
 
 def _deploy_bundled_models():
-    """Copy models từ bundle vào ~/.paddlex/ nếu chưa có (chỉ khi frozen EXE)."""
+    """Copy OCR models from PyInstaller bundle to ~/.paddlex/ if missing."""
     if not getattr(sys, 'frozen', False):
         return
     import shutil
@@ -102,6 +114,11 @@ def _deploy_bundled_models():
 
 
 def _get_ocr():
+    """Lazy-initialize PaddleOCR with detection + recognition (thread-safe).
+
+    Both models run: detection finds candidate regions, recognition
+    validates which ones are actual text. Only validated text is erased.
+    """
     global _ocr
     if _ocr is not None:
         return _ocr
@@ -121,10 +138,72 @@ def _get_ocr():
     return _ocr
 
 
+def _filter_ocr_bboxes(results):
+    """Extract bounding boxes from OCR results using recognition as validator.
+
+    Strategy:
+    1. Detection model finds candidate text regions (dt_polys / dt_scores)
+    2. Recognition model reads each region (rec_texts / rec_scores)
+    3. Only regions where recognition CONFIRMS real text are kept
+
+    A region is considered real text only if ALL conditions are met:
+    - Detection confidence >= OCR_DET_SCORE_THRESHOLD
+    - Recognition confidence >= OCR_REC_SCORE_THRESHOLD
+    - Recognized text has >= OCR_MIN_TEXT_LENGTH characters
+    - Recognized text contains at least one alphanumeric character
+    - Bounding box area >= OCR_MIN_BBOX_AREA
+
+    Returns a list of (x1, y1, x2, y2) tuples for confirmed text regions.
+    """
+    bboxes = []
+    for res in results:
+        if not res or not res.get("dt_polys"):
+            continue
+        det_scores = res.get("dt_scores", [])
+        rec_texts = res.get("rec_texts", [])
+        rec_scores = res.get("rec_scores", [])
+        for idx, bbox in enumerate(res["dt_polys"]):
+            # 1) Detection confidence check
+            if idx < len(det_scores) and det_scores[idx] < OCR_DET_SCORE_THRESHOLD:
+                continue
+
+            # 2) Recognition must exist and confirm it is text
+            if idx >= len(rec_texts) or idx >= len(rec_scores):
+                continue  # No recognition result → skip (don't erase)
+
+            text = rec_texts[idx].strip()
+            score = rec_scores[idx]
+
+            # 3) Recognition confidence must be high
+            if score < OCR_REC_SCORE_THRESHOLD:
+                continue
+
+            # 4) Text must have minimum length
+            if len(text) < OCR_MIN_TEXT_LENGTH:
+                continue
+
+            # 5) Text must contain at least one letter or digit
+            #    (filters out pure symbols/noise like "---", "...", "|||")
+            if not any(c.isalnum() for c in text):
+                continue
+
+            # 6) Bounding box must have minimum area
+            xs = [int(p[0]) for p in bbox]
+            ys = [int(p[1]) for p in bbox]
+            x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+            if (x2 - x1) * (y2 - y1) < OCR_MIN_BBOX_AREA:
+                continue
+
+            bboxes.append((x1, y1, x2, y2))
+    return bboxes
+
+
 def load_image(file_path, return_dataset=False):
-    """Load ảnh từ file.
-    Nếu return_dataset=True, trả về (PIL Image, pydicom Dataset, pixel_array gốc) cho DCM,
-    hoặc (PIL Image, None, None) cho ảnh thường.
+    """Load an image from file.
+
+    If ``return_dataset=True``, returns ``(PIL Image, pydicom Dataset,
+    raw pixel_array)`` for DICOM files, or ``(PIL Image, None, None)``
+    for regular images.
     """
     import pydicom
     import numpy as np
@@ -143,11 +222,11 @@ def load_image(file_path, return_dataset=False):
     if suffix in IMAGE_EXTS:
         img = Image.open(file_path).convert("L")
         return (img, None, None) if return_dataset else img
-    raise ValueError(f"Định dạng không hỗ trợ: {suffix}")
+    raise ValueError(f"Unsupported format: {suffix}")
 
 
 def remove_text_from_image(file_path, output_path):
-    """Xóa text burned-in. Nếu input là DICOM → anonymize metadata và lưu .dcm."""
+    """Remove burned-in text. DICOM files also get metadata anonymized."""
     import numpy as np
     from PIL import ImageDraw
     file_path = Path(file_path)
@@ -156,17 +235,7 @@ def remove_text_from_image(file_path, output_path):
     ocr_input = np.array(image.convert("RGB") if image.mode != "RGB" else image)
     results = ocr.predict(ocr_input)
 
-    bboxes = []
-    for res in results:
-        if not res or not res.get("dt_polys"):
-            continue
-        texts = res.get("rec_texts", [])
-        for idx, bbox in enumerate(res["dt_polys"]):
-            if idx < len(texts) and len(texts[idx].strip()) <= 1:
-                continue
-            xs = [int(p[0]) for p in bbox]
-            ys = [int(p[1]) for p in bbox]
-            bboxes.append((min(xs), min(ys), max(xs), max(ys)))
+    bboxes = _filter_ocr_bboxes(results)
 
     removed = len(bboxes)
     if ds is not None:
@@ -181,13 +250,13 @@ def remove_text_from_image(file_path, output_path):
 
 
 def run_xray_processing(image_files, output_dir, callback):
-    """Xử lý danh sách ảnh X-Quang: load → OCR xóa text → anonymize metadata → lưu DICOM."""
+    """Process a list of X-Ray images: load → OCR text removal → anonymize → save."""
     try:
         import numpy as np
         from PIL import ImageDraw
 
         if not image_files:
-            callback(False, "Không có file ảnh để xử lý.")
+            callback(False, "No image files to process.")
             return
 
         indexed_files, output_paths = _plan_output_paths(image_files, output_dir)
@@ -195,7 +264,7 @@ def run_xray_processing(image_files, output_dir, callback):
         max_workers = min(8, total, os.cpu_count() or 4)
         errors = []
 
-        callback("progress", "Đang khởi tạo OCR model...")
+        callback("progress", "Initializing OCR model...")
         ocr = _get_ocr()
 
         BATCH_SIZE = 16
@@ -217,7 +286,7 @@ def run_xray_processing(image_files, output_dir, callback):
                             loaded[index] = future.result()
                         except Exception as e:
                             errors.append(f"{Path(fp).name}: {e}")
-                            log.warning("Lỗi tải ảnh %s: %s", fp, e)
+                            log.warning("Failed to load image %s: %s", fp, e)
 
                 for index, fpath in batch:
                     if index not in loaded:
@@ -227,18 +296,7 @@ def run_xray_processing(image_files, output_dir, callback):
                     ocr_input = np.array(image.convert("RGB") if image.mode != "RGB" else image)
                     results = ocr.predict(ocr_input)
 
-                    bboxes = []
-                    for res in results:
-                        if not res or not res.get("dt_polys"):
-                            continue
-                        texts = res.get("rec_texts", [])
-                        for idx, bbox in enumerate(res["dt_polys"]):
-                            if idx < len(texts) and len(texts[idx].strip()) <= 1:
-                                continue
-                            xs = [int(p[0]) for p in bbox]
-                            ys = [int(p[1]) for p in bbox]
-                            bboxes.append((min(xs), min(ys), max(xs), max(ys)))
-
+                    bboxes = _filter_ocr_bboxes(results)
                     removed = len(bboxes)
 
                     if ds is not None:
@@ -254,8 +312,8 @@ def run_xray_processing(image_files, output_dir, callback):
                                 draw.rectangle([x1, y1, x2, y2], fill=0)
                         save_futures.append(save_pool.submit(image.save, out))
 
-                    status_msg = (f"xóa {removed} vùng text" if removed
-                                  else "không có text, chỉ anonymize")
+                    status_msg = (f"removed {removed} text regions" if removed
+                                  else "no text found, anonymize only")
                     callback("progress", f"[{index}/{total}] {Path(fpath).name}: {status_msg}")
 
             for f in save_futures:
@@ -263,10 +321,10 @@ def run_xray_processing(image_files, output_dir, callback):
 
         processed = total - len(errors)
         if errors:
-            callback(True, f"Hoàn thành! {processed}/{total} ảnh ({len(errors)} lỗi).")
+            callback(True, f"Done! {processed}/{total} images ({len(errors)} errors).")
         else:
-            callback(True, f"Hoàn thành! {total} ảnh đã xử lý ({max_workers} luồng).")
+            callback(True, f"Done! {total} images processed ({max_workers} threads).")
     except Exception as e:
         import traceback
         log.error("run_xray_processing failed:\n%s", traceback.format_exc())
-        callback(False, f"Lỗi: {e}\n\n{traceback.format_exc()}")
+        callback(False, f"Error: {e}\n\n{traceback.format_exc()}")

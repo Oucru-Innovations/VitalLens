@@ -1,8 +1,8 @@
-"""Cấu hình chung cho VitalLens.
+"""Global configuration for VitalLens.
 
-Mọi hằng số / setting runtime sống trong `Settings`. Các tên viết hoa
-ở cuối file được re-export để giữ tương thích với code hiện tại
-(`from apps.config import BG_MAIN, SFTP_PATH, ...`).
+All runtime constants and settings live in the ``Settings`` dataclass.
+Upper-case names at the bottom of this file are re-exported for
+backward compatibility (``from apps.config import BG_MAIN, SFTP_PATH, ...``).
 """
 
 from __future__ import annotations
@@ -14,11 +14,14 @@ from pathlib import Path
 
 
 def _resolve_app_dir() -> Path:
-    """Thư mục gốc của ứng dụng, chịu được cả khi chạy bằng PyInstaller .exe."""
+    """Return the application root directory.
+
+    Works correctly both during development and inside a PyInstaller EXE.
+    """
 
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
-    # config.py nằm tại apps/config.py -> parent.parent là repo root.
+    # config.py lives at apps/config.py → parent.parent is the repo root.
     return Path(__file__).resolve().parent.parent
 
 
@@ -26,7 +29,7 @@ APP_DIR: Path = _resolve_app_dir()
 
 
 # =====================================================================
-# Theme (màu sắc) - giữ flat constants để Tkinter widgets đọc nhanh.
+# Theme (colors) — flat constants so Tkinter widgets can read them fast.
 # =====================================================================
 
 BG_MAIN = "#f5f5f5"
@@ -52,27 +55,68 @@ BORDER_COLOR = "#d4d4d4"
 # =====================================================================
 
 
-def _load_dotenv_if_present(app_dir: Path) -> None:
-    """Load file cấu hình nếu có + thư viện dotenv. Silent nếu thiếu.
+def _parse_env_file_manually(env_path: Path) -> None:
+    """Fallback parser when ``python-dotenv`` is not importable (PyInstaller).
 
-    Ưu tiên đọc `.env` (chuẩn dotenv). Nếu không có, fallback sang file tên
-    `env` (không dấu chấm) để tránh trục trặc trên Windows - nơi Explorer
-    khó tạo file bắt đầu bằng dấu chấm.
+    Reads a ``.env`` file in ``KEY=VALUE`` format and writes values into
+    ``os.environ``. Blank lines and comment lines (``#``) are skipped.
+    Outer quotes (``"`` or ``'``) and surrounding whitespace are stripped
+    from values.
 
-    Giá trị đã tồn tại trong ``os.environ`` KHÔNG bị đè (``override=False``)
-    nên biến môi trường của hệ điều hành vẫn thắng file `.env`.
+    Only writes keys that do **not** already exist in ``os.environ``
+    (same as ``load_dotenv(override=False)``).
     """
 
     try:
-        from dotenv import load_dotenv
-    except ImportError:
+        with open(env_path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip()
+                # Strip surrounding quotes if present
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                    value = value[1:-1]
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except OSError:
+        pass
+
+
+def _load_dotenv_if_present(app_dir: Path) -> None:
+    """Load a dotenv config file if one exists.
+
+    Looks for ``.env`` first, then falls back to ``env`` (no dot) — handy
+    on Windows where Explorer refuses to create filenames starting with
+    a dot.
+
+    Existing ``os.environ`` values are NOT overridden (``override=False``),
+    so OS-level environment variables always win over the file.
+
+    When ``python-dotenv`` is not importable (common in PyInstaller
+    bundles), falls back to a simple built-in parser.
+    """
+
+    env_path: Path | None = None
+    for filename in (".env", "env"):
+        candidate = app_dir / filename
+        if candidate.is_file():
+            env_path = candidate
+            break
+
+    if env_path is None:
         return
 
-    for filename in (".env", "env"):
-        env_path = app_dir / filename
-        if env_path.is_file():
-            load_dotenv(dotenv_path=env_path, override=False)
-            return
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(dotenv_path=env_path, override=False)
+    except ImportError:
+        # python-dotenv not bundled → use built-in parser
+        _parse_env_file_manually(env_path)
 
 
 _load_dotenv_if_present(APP_DIR)
@@ -80,7 +124,7 @@ _load_dotenv_if_present(APP_DIR)
 
 @dataclass(frozen=True)
 class Settings:
-    """Tất cả setting runtime (SFTP, API) gom vào một chỗ cho dễ test."""
+    """All runtime settings (SFTP, API) in one place for easy testing."""
 
     # SFTP
     sftp_host: str = "datastore.oucru.org"
@@ -97,7 +141,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        """Tạo instance từ biến môi trường (kèm hardcoded default)."""
+        """Create an instance from environment variables (with hardcoded defaults)."""
 
         def _env_str(name: str, default: str) -> str:
             return os.environ.get(name, default)
@@ -132,7 +176,7 @@ class Settings:
 SETTINGS: Settings = Settings.from_env()
 
 # =====================================================================
-# Legacy flat constants (back-compat) - các module khác đang import tên này.
+# Legacy flat constants (backward compatibility)
 # =====================================================================
 
 SFTP_HOST: str = SETTINGS.sftp_host

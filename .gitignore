@@ -14,8 +14,8 @@ env/
 .env
 .env.*
 !.env.example
-# File `env` (khong dau cham) o repo root - VitalLens cung load file nay
-# lam fallback nen phai chan de tranh lo token.
+# The `env` file (no dot) at repo root — VitalLens also loads this
+# as a fallback, so it must be ignored to avoid leaking tokens.
 /env
 
 # PyInstaller build artifacts
@@ -33,7 +33,7 @@ dist/
 .DS_Store
 Thumbs.db
 
-# VitalLens runtime output (KHÔNG commit dữ liệu xuất ra)
+# VitalLens runtime output (do NOT commit exported data)
 output_pdf/
 output_xray/
 KetQua_*.xlsx

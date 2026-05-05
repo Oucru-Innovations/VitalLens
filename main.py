@@ -1,8 +1,8 @@
 """VitalLens - Entry point.
 
-Logic setup environment được gom vào `apps/logging_setup.py` để file entry
-gọn và dễ nhìn. Gọi `setup_logging()` và `patch_paddlex_when_frozen()`
-TRƯỚC khi import bất kỳ module Paddle nào khác.
+Environment setup is centralized in `apps/logging_setup.py` to keep this
+file minimal. Call `setup_logging()` and `patch_paddlex_when_frozen()`
+BEFORE importing any Paddle modules.
 """
 
 from apps.logging_setup import patch_paddlex_when_frozen, setup_logging

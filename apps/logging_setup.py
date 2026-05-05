@@ -1,7 +1,7 @@
-"""Cấu hình logging tập trung cho toàn app.
+"""Centralized logging configuration for the entire app.
 
-Được gọi một lần từ `main.py`, trước khi bất kỳ module Paddle nào được import.
-Gộp logic từng rải rác trước đây (`logging.getLogger('paddle').setLevel(...)`).
+Called once from `main.py` before any Paddle module is imported.
+Consolidates logic that was previously scattered across files.
 """
 
 from __future__ import annotations
@@ -21,23 +21,23 @@ _NOISY_LOGGERS = (
 
 
 def setup_logging(level: int | str = logging.INFO) -> None:
-    """Cấu hình root logger và làm im các logger quá ồn.
+    """Configure root logger and silence noisy loggers.
 
-    Cũng thiết lập các biến môi trường để Paddle bớt in message vô nghĩa.
-    Nếu gọi nhiều lần sẽ no-op (kiểm tra thông qua flag trên root logger).
+    Also sets environment variables to suppress useless Paddle messages.
+    No-op if called more than once (guarded by an internal flag).
     """
 
-    # Guard: chỉ setup một lần
+    # Guard: only run once
     if getattr(setup_logging, "_configured", False):
         return
     setup_logging._configured = True  # type: ignore[attr-defined]
 
-    # Biến môi trường cho Paddle/OCR - phải đặt trước khi paddle được import.
+    # Environment variables for Paddle/OCR — must be set before paddle import.
     os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
     os.environ.setdefault("FLAGS_enable_pir_api", "0")
     os.environ.setdefault("GLOG_minloglevel", "2")
 
-    # Tắt 2 warning không dập được qua logger.
+    # Suppress warnings that cannot be silenced via loggers.
     warnings.filterwarnings("ignore", message="No ccache found")
     warnings.filterwarnings(
         "ignore", message=".*doesn't match a supported version"
@@ -54,10 +54,11 @@ def setup_logging(level: int | str = logging.INFO) -> None:
 
 
 def patch_paddlex_when_frozen() -> None:
-    """Khi chạy dưới PyInstaller EXE, PaddleX check dependency không đúng.
+    """Bypass PaddleX dependency checks when running as a PyInstaller EXE.
 
-    Monkey-patch các hàm check trả True/None để bỏ qua. Chỉ áp dụng
-    khi `sys.frozen` bật.
+    PaddleX performs dependency checks that fail inside a frozen bundle.
+    Monkey-patch the check functions to return True/None. Only applied
+    when ``sys.frozen`` is set.
     """
 
     if not getattr(sys, "frozen", False):

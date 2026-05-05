@@ -1,11 +1,11 @@
-"""VitalLens - Python/Tkinter desktop app hỗ trợ xử lý dữ liệu y tế.
+"""VitalLens - Python/Tkinter desktop app for medical data processing.
 
-Các package con:
-- `apps.pages`     : UI layer (tkinter Frames cho từng trang).
-- `apps.widgets`   : Widgets dùng chung (button, status bar, date picker...).
-- `apps.services`  : Business + I/O (storage, payload_io, excel_export,
-                     lab_records, pdf_redact, upload_api).
-- `apps.processing`: Pure processing (OCR X-Ray, XML → Excel, image_loader).
+Sub-packages:
+- ``apps.pages``     : UI layer (tkinter Frames for each page).
+- ``apps.widgets``   : Shared widgets (button, status bar, date picker…).
+- ``apps.services``  : Business logic + I/O (storage, payload_io, excel_export,
+                       lab_records, pdf_redact, upload_api).
+- ``apps.processing``: CPU-bound processing (OCR X-Ray, XML → Excel).
 """
 
 __version__ = "0.2.0"
