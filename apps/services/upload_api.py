@@ -22,6 +22,7 @@ def upload_pair(
     bearer_token: Optional[str],
     pdf_path: str,
     csv_path: str,
+    owner: str = "",
     timeout: float = 60.0,
 ) -> UploadResult:
     """Gửi POST multipart tới `url`. Không raise, luôn trả UploadResult."""
@@ -30,6 +31,7 @@ def upload_pair(
     log.info("  URL       : %s", url)
     log.info("  PDF file  : %s", pdf_path)
     log.info("  CSV file  : %s", csv_path)
+    log.info("  Owner     : %s", owner or "(không có)")
     log.info("  Timeout   : %.1fs", timeout)
 
     if not url:
@@ -61,45 +63,44 @@ def upload_pair(
             log.error("  [FAIL] File không tồn tại: %s", fpath)
             return UploadResult(False, None, f"File không tìm thấy: {fpath}")
 
-    # --- Gửi request ---
-    log.info("  Đang gửi HTTP POST multipart...")
-    try:
-        with open(pdf_path, "rb") as fpdf, open(csv_path, "rb") as fcsv:
-            files = {
-                "pdf_file": (os.path.basename(pdf_path), fpdf, "application/pdf"),
-                "csv_file": (os.path.basename(csv_path), fcsv, "text/csv"),
-            }
-            log.debug("  Fields    : %s", list(files.keys()))
-            resp = requests.post(url, headers=headers, files=files, timeout=timeout)
-    except Exception as e:  # noqa: BLE001
-        log.warning("  [FAIL] Lỗi mạng khi gửi request: %s", e)
-        return UploadResult(False, None, f"Lỗi mạng: {e}")
+    # --- Gửi từng file riêng (server dùng upload.single("file")) ---
+    results = []
+    for label, fpath, mime in (
+        ("PDF", pdf_path, "application/pdf"),
+        ("CSV", csv_path, "text/csv"),
+    ):
+        log.info("  [%s] Đang gửi %s...", label, os.path.basename(fpath))
+        try:
+            with open(fpath, "rb") as f:
+                files = [("file", (os.path.basename(fpath), f, mime))]
+                data = {"owner": owner} if owner else {}
+                resp = requests.post(
+                    url, headers=headers, files=files, data=data,
+                    timeout=timeout,
+                )
+        except Exception as e:  # noqa: BLE001
+            log.warning("  [%s] Lỗi mạng: %s", label, e)
+            return UploadResult(False, None, f"Lỗi mạng khi gửi {label}: {e}")
 
-    # --- Phân tích response ---
-    log.info("  HTTP status   : %d", resp.status_code)
-    log.debug("  Response headers: %s", dict(resp.headers))
-    log.debug(
-        "  Response body (%d bytes): %s",
-        len(resp.content),
-        resp.text[:500] if resp.text else "(trống)",
-    )
+        log.info("  [%s] HTTP status: %d", label, resp.status_code)
+        log.debug("  [%s] Body: %s", label, resp.text[:300] if resp.text else "(trống)")
 
-    if resp.status_code in (200, 201):
-        log.info("  [OK] Upload thành công (status %d)", resp.status_code)
-        log.info("=== upload_pair KẾT THÚC: OK ===")
-        return UploadResult(True, resp.status_code, "OK")
+        if resp.status_code not in (200, 201):
+            log.error(
+                "  [FAIL] Server trả lỗi %d khi gửi %s — body: %s",
+                resp.status_code, label,
+                resp.text[:500] if resp.text else "(trống)",
+            )
+            return UploadResult(
+                False,
+                resp.status_code,
+                f"Server báo lỗi {resp.status_code} khi gửi {label}: {resp.text[:200]}",
+            )
+        results.append(resp.status_code)
 
-    log.error(
-        "  [FAIL] Server trả lỗi %d — body: %s",
-        resp.status_code,
-        resp.text[:500] if resp.text else "(trống)",
-    )
-    log.info("=== upload_pair KẾT THÚC: THẤT BẠI ===")
-    return UploadResult(
-        False,
-        resp.status_code,
-        f"Server báo lỗi {resp.status_code}: {resp.text[:200]}",
-    )
+    log.info("  [OK] Upload cả 2 file thành công: %s", results)
+    log.info("=== upload_pair KẾT THÚC: OK ===")
+    return UploadResult(True, results[0], "OK")
 
 
 __all__ = ["UploadResult", "upload_pair"]

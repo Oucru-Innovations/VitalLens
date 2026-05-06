@@ -26,6 +26,7 @@ from apps.config import (
     ACCENT_PURPLE,
     ACCENT_RED,
     API_BEARER_TOKEN,
+    API_UPLOAD_OWNER,
     API_UPLOAD_URL,
     APP_DIR,
     BG_CARD,
@@ -1236,46 +1237,176 @@ class UploadPDFPage(tk.Frame):
     # UPLOAD
     # ================================================================
 
+    def _ask_owner_email(self) -> str | None:
+        """Hiện popup nhỏ hỏi email owner. Trả None nếu user hủy."""
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Nhập Owner Email")
+        dialog.resizable(False, False)
+        dialog.configure(bg=BG_CARD)
+        dialog.grab_set()
+
+        # Căn giữa cửa sổ
+        dialog.update_idletasks()
+        w, h = 380, 170
+        x = self.winfo_toplevel().winfo_x() + (self.winfo_toplevel().winfo_width() - w) // 2
+        y = self.winfo_toplevel().winfo_y() + (self.winfo_toplevel().winfo_height() - h) // 2
+        dialog.geometry(f"{w}x{h}+{x}+{y}")
+
+        tk.Label(
+            dialog,
+            text="📧  Nhập email (owner):",
+            font=("Helvetica", 12, "bold"),
+            bg=BG_CARD,
+            fg=FG_TITLE,
+        ).pack(padx=20, pady=(15, 5), anchor="w")
+
+        email_var = tk.StringVar(value=API_UPLOAD_OWNER)
+        entry = tk.Entry(
+            dialog,
+            textvariable=email_var,
+            font=("Helvetica", 12),
+            bg=BG_INPUT,
+            fg=FG_TEXT,
+            insertbackground=FG_TEXT,
+            borderwidth=1,
+            highlightthickness=1,
+            highlightcolor=ACCENT_BLUE,
+        )
+        entry.pack(fill="x", padx=20, pady=5, ipady=6)
+        entry.focus_set()
+        entry.select_range(0, "end")
+
+        result: list[str | None] = [None]
+
+        def on_ok(event=None):
+            val = email_var.get().strip()
+            if not val or "@" not in val:
+                entry.config(highlightcolor=ACCENT_RED, highlightbackground=ACCENT_RED)
+                return
+            result[0] = val
+            dialog.destroy()
+
+        def on_cancel():
+            dialog.destroy()
+
+        entry.bind("<Return>", on_ok)
+        dialog.bind("<Escape>", lambda e: on_cancel())
+
+        btn_frame = tk.Frame(dialog, bg=BG_CARD)
+        btn_frame.pack(pady=(10, 15))
+
+        ok_btn = tk.Label(
+            btn_frame,
+            text="  ✓  OK  ",
+            font=("Helvetica", 11, "bold"),
+            bg=ACCENT_BLUE,
+            fg="#ffffff",
+            cursor="hand2",
+            padx=12,
+            pady=5,
+        )
+        ok_btn.pack(side="left", padx=8)
+        ok_btn.bind("<Button-1>", on_ok)
+        ok_btn.bind("<Enter>", lambda e: ok_btn.config(bg=BTN_HOVER_BLUE))
+        ok_btn.bind("<Leave>", lambda e: ok_btn.config(bg=ACCENT_BLUE))
+
+        cancel_btn = tk.Label(
+            btn_frame,
+            text="  Hủy  ",
+            font=("Helvetica", 11),
+            bg="#6b7280",
+            fg="#ffffff",
+            cursor="hand2",
+            padx=12,
+            pady=5,
+        )
+        cancel_btn.pack(side="left", padx=8)
+        cancel_btn.bind("<Button-1>", lambda e: on_cancel())
+        cancel_btn.bind("<Enter>", lambda e: cancel_btn.config(bg="#4b5563"))
+        cancel_btn.bind("<Leave>", lambda e: cancel_btn.config(bg="#6b7280"))
+
+        dialog.wait_window()
+        return result[0]
+
     def _upload(self) -> None:
         if self.view_mode != "pending":
             return
 
-        sel = self.pending_listbox.curselection()
-        if not sel:
+        if not self.saved_exports:
             messagebox.showinfo(
-                "Chưa chọn file",
-                "Vui lòng chỉ định 1 cặp file trong vùng Pending File để upload.",
+                "Không có file",
+                "Chưa có cặp PDF + CSV nào trong Pending để upload.",
             )
             return
 
-        idx = sel[0]
-        if idx >= len(self.saved_exports):
-            return
-
-        exp = self.saved_exports[idx]
-        pdf_to_upload = exp["pdf_path"]
-        csv_to_upload = exp["csv_path"]
+        total = len(self.saved_exports)
 
         if not API_UPLOAD_URL:
             msg = (
                 "CHƯA CÓ BACKEND ENDPOINT!\n\n"
                 "Bạn chưa cấu hình API_UPLOAD_URL trong file .env,\n"
-                f"Tuy nhiên để demo thì: Sẽ giả lập upload thành công file\n"
-                f"{os.path.basename(pdf_to_upload)}\nvà chuyển sang mục Uploaded nhé?"
+                f"Tuy nhiên để demo thì: Sẽ giả lập upload thành công\n"
+                f"{total} cặp file và chuyển sang mục Uploaded nhé?"
             )
             if not messagebox.askyesno("Upload Demo", msg):
                 return
-        else:
-            msg = (
-                f"Sẽ đẩy 2 file lên qua API:\n\n"
-                f"1. {os.path.basename(pdf_to_upload)}\n"
-                f"2. {os.path.basename(csv_to_upload)}\n\n"
-                "Xác nhận gửi HTTP POST?"
-            )
-            if not messagebox.askyesno("Upload API", msg):
-                return
 
-            self.status.set("Đang upload...", "working")
+            # Demo mode: chuyển tất cả sang uploaded
+            while self.saved_exports:
+                exp = self.saved_exports.pop(0)
+                self.uploaded_exports.append(exp)
+                original_file = exp.get("original_file")
+                if original_file:
+                    self.draft_form_data.pop(original_file, None)
+                    self.draft_redactions.pop(original_file, None)
+                    if not any(
+                        e.get("original_file") == original_file
+                        for e in self.saved_exports
+                    ):
+                        self.saved_files.discard(original_file)
+
+            self.current_export_idx = None
+            self._refresh_pending_list()
+            self._refresh_file_list()
+            self.status.set(f"Demo: {total} cặp file đã chuyển sang Uploaded", "success")
+            return
+
+        # --- Real upload ---
+        file_list = "\n".join(
+            f"  {i+1}. {exp['display_name']}"
+            for i, exp in enumerate(self.saved_exports)
+        )
+
+        # Hỏi email owner qua dialog nhỏ
+        owner_email = self._ask_owner_email()
+        if owner_email is None:
+            return  # User hủy
+
+        msg = (
+            f"Sẽ upload {total} cặp file (PDF + CSV) lên server:\n\n"
+            f"{file_list}\n\n"
+            f"Owner: {owner_email}\n\n"
+            "Xác nhận gửi tất cả?"
+        )
+        if not messagebox.askyesno("Upload API", msg):
+            return
+
+        success_count = 0
+        fail_count = 0
+        first_error = ""
+
+        # Upload từng cặp, luôn lấy phần tử đầu tiên vì list bị pop
+        while self.saved_exports:
+            exp = self.saved_exports[0]
+            pdf_to_upload = exp["pdf_path"]
+            csv_to_upload = exp["csv_path"]
+
+            self.status.set(
+                f"Đang upload [{success_count + fail_count + 1}/{total}]: "
+                f"{exp['display_name']}...",
+                "working",
+            )
             self.update()
 
             result = upload_pair(
@@ -1283,36 +1414,50 @@ class UploadPDFPage(tk.Frame):
                 API_BEARER_TOKEN,
                 pdf_to_upload,
                 csv_to_upload,
+                owner=owner_email,
             )
-            if not result.ok:
-                self.status.set(result.message, "error")
-                messagebox.showerror(
-                    "Upload thất bại",
-                    result.message,
-                )
-                return
 
-        exp = self.saved_exports.pop(idx)
-        self.uploaded_exports.append(exp)
+            if result.ok:
+                success_count += 1
+                exp = self.saved_exports.pop(0)
+                self.uploaded_exports.append(exp)
 
-        original_file = exp.get("original_file")
-        if original_file:
-            self.draft_form_data.pop(original_file, None)
-            self.draft_redactions.pop(original_file, None)
-            still_has_pending = any(
-                e.get("original_file") == original_file for e in self.saved_exports
-            )
-            if not still_has_pending:
-                self.saved_files.discard(original_file)
+                original_file = exp.get("original_file")
+                if original_file:
+                    self.draft_form_data.pop(original_file, None)
+                    self.draft_redactions.pop(original_file, None)
+                    if not any(
+                        e.get("original_file") == original_file
+                        for e in self.saved_exports
+                    ):
+                        self.saved_files.discard(original_file)
+            else:
+                fail_count += 1
+                if not first_error:
+                    first_error = result.message
+                # Dừng khi gặp lỗi
+                break
 
-        if self.current_export_idx == idx:
-            self.current_export_idx = None
-        elif self.current_export_idx is not None and self.current_export_idx > idx:
-            self.current_export_idx -= 1
-
+        self.current_export_idx = None
         self._refresh_pending_list()
         self._refresh_file_list()
-        self.status.set("Upload thành công!", "success")
+
+        if fail_count:
+            self.status.set(
+                f"Upload: {success_count} OK, {fail_count} lỗi. "
+                f"Còn {len(self.saved_exports)} file pending.",
+                "error",
+            )
+            messagebox.showerror(
+                "Upload có lỗi",
+                f"Đã upload {success_count}/{total} cặp file.\n\n"
+                f"Lỗi: {first_error}\n\n"
+                f"Các file còn lại vẫn nằm trong Pending.",
+            )
+        else:
+            self.status.set(
+                f"Upload thành công! {success_count}/{total} cặp file.", "success"
+            )
 
 
 __all__ = ["UploadPDFPage"]

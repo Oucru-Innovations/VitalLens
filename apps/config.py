@@ -104,34 +104,67 @@ def _load_dotenv_if_present(app_dir: Path) -> None:
     bundles), falls back to a simple built-in parser.
     """
 
-    print(f"[CONFIG] APP_DIR = {app_dir}")
-    print(f"[CONFIG] frozen  = {getattr(sys, 'frozen', False)}")
+    # --- Debug: ghi ra file log cạnh EXE để trace .env loading ---
+    _debug_lines: list[str] = []
+    def _dbg(msg: str) -> None:
+        _debug_lines.append(msg)
+
+    _dbg(f"APP_DIR  = {app_dir}")
+    _dbg(f"frozen   = {getattr(sys, 'frozen', False)}")
+    _dbg(f"cwd      = {Path.cwd()}")
 
     env_path: Path | None = None
     for filename in (".env", "env"):
         candidate = app_dir / filename
         exists = candidate.is_file()
-        print(f"[CONFIG] Checking {candidate} → {'FOUND' if exists else 'not found'}")
+        _dbg(f"Check    : {candidate} -> {'FOUND' if exists else 'not found'}")
         if exists:
             env_path = candidate
             break
 
     if env_path is None:
-        print("[CONFIG] ⚠ No .env file found!")
+        _dbg("RESULT   : No .env file found!")
+        # Ghi debug log
+        try:
+            (app_dir / "config_debug.log").write_text(
+                "\n".join(_debug_lines), encoding="utf-8"
+            )
+        except OSError:
+            pass
         return
 
-    print(f"[CONFIG] Loading env from: {env_path}")
+    _dbg(f"Loading  : {env_path}")
+
+    # Đọc raw content để kiểm tra
+    try:
+        raw = env_path.read_text(encoding="utf-8")
+        _dbg(f"Raw .env ({len(raw)} bytes):")
+        for line in raw.splitlines():
+            _dbg(f"  | {line}")
+    except OSError as e:
+        _dbg(f"Read err : {e}")
+
     try:
         from dotenv import load_dotenv
         load_dotenv(dotenv_path=env_path, override=False)
-        print("[CONFIG] Used: python-dotenv")
+        _dbg("Parser   : python-dotenv")
     except ImportError:
         # python-dotenv not bundled → use built-in parser
         _parse_env_file_manually(env_path)
-        print("[CONFIG] Used: built-in parser (dotenv not available)")
+        _dbg("Parser   : built-in (dotenv not available)")
 
-    print(f"[CONFIG] API_UPLOAD_URL = '{os.environ.get('API_UPLOAD_URL', '')}'")
-    print(f"[CONFIG] API_BEARER_TOKEN = {'(set)' if os.environ.get('API_BEARER_TOKEN') else '(empty)'}")
+    url_val = os.environ.get("API_UPLOAD_URL", "")
+    token_val = os.environ.get("API_BEARER_TOKEN", "")
+    _dbg(f"RESULT   : API_UPLOAD_URL = '{url_val}'")
+    _dbg(f"RESULT   : API_BEARER_TOKEN = {'(set, len=' + str(len(token_val)) + ')' if token_val else '(empty)'}")
+
+    # Ghi debug log
+    try:
+        (app_dir / "config_debug.log").write_text(
+            "\n".join(_debug_lines), encoding="utf-8"
+        )
+    except OSError:
+        pass
 
 
 _load_dotenv_if_present(APP_DIR)
@@ -153,6 +186,7 @@ class Settings:
     # API upload
     api_upload_url: str = ""
     api_bearer_token: str = ""
+    api_upload_owner: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -185,6 +219,7 @@ class Settings:
             ),
             api_upload_url=_env_str("API_UPLOAD_URL", ""),
             api_bearer_token=_env_str("API_BEARER_TOKEN", ""),
+            api_upload_owner=_env_str("API_UPLOAD_OWNER", ""),
         )
 
 
@@ -200,6 +235,7 @@ SFTP_DEMO_MODE: bool = SETTINGS.sftp_demo_mode
 SFTP_PATH: str = SETTINGS.sftp_path
 API_UPLOAD_URL: str = SETTINGS.api_upload_url
 API_BEARER_TOKEN: str = SETTINGS.api_bearer_token
+API_UPLOAD_OWNER: str = SETTINGS.api_upload_owner
 
 
 __all__ = [
@@ -231,4 +267,5 @@ __all__ = [
     "SFTP_PATH",
     "API_UPLOAD_URL",
     "API_BEARER_TOKEN",
+    "API_UPLOAD_OWNER",
 ]
