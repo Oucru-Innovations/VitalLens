@@ -92,6 +92,22 @@ _all_hiddenimports += [
     # Standard library modules used dynamically
     'xml.etree.ElementTree',
     'json', 'base64', 'collections',
+    # numpy internals (numpy 2.x restructured core → _core)
+    'numpy',
+    'numpy.core',
+    'numpy.core._multiarray_umath',
+    'numpy.core.multiarray',
+    'numpy.core.numeric',
+    'numpy.core._methods',
+    'numpy._core',
+    'numpy._core._multiarray_umath',
+    'numpy._core.multiarray',
+    'numpy._core._methods',
+    'numpy.random',
+    'numpy.random._common',
+    'numpy.fft',
+    'numpy.linalg',
+    'numpy.linalg._umath_linalg',
 ]
 
 # =====================================================================

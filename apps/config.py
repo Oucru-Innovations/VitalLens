@@ -7,10 +7,13 @@ backward compatibility (``from apps.config import BG_MAIN, SFTP_PATH, ...``).
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 def _resolve_app_dir() -> Path:
@@ -101,22 +104,34 @@ def _load_dotenv_if_present(app_dir: Path) -> None:
     bundles), falls back to a simple built-in parser.
     """
 
+    print(f"[CONFIG] APP_DIR = {app_dir}")
+    print(f"[CONFIG] frozen  = {getattr(sys, 'frozen', False)}")
+
     env_path: Path | None = None
     for filename in (".env", "env"):
         candidate = app_dir / filename
-        if candidate.is_file():
+        exists = candidate.is_file()
+        print(f"[CONFIG] Checking {candidate} → {'FOUND' if exists else 'not found'}")
+        if exists:
             env_path = candidate
             break
 
     if env_path is None:
+        print("[CONFIG] ⚠ No .env file found!")
         return
 
+    print(f"[CONFIG] Loading env from: {env_path}")
     try:
         from dotenv import load_dotenv
         load_dotenv(dotenv_path=env_path, override=False)
+        print("[CONFIG] Used: python-dotenv")
     except ImportError:
         # python-dotenv not bundled → use built-in parser
         _parse_env_file_manually(env_path)
+        print("[CONFIG] Used: built-in parser (dotenv not available)")
+
+    print(f"[CONFIG] API_UPLOAD_URL = '{os.environ.get('API_UPLOAD_URL', '')}'")
+    print(f"[CONFIG] API_BEARER_TOKEN = {'(set)' if os.environ.get('API_BEARER_TOKEN') else '(empty)'}")
 
 
 _load_dotenv_if_present(APP_DIR)
