@@ -25,6 +25,7 @@ LAB_INFO_KEYS = [
     "patient_name",
     "patient_dob",
     "patient_id",
+    "sample_id",
     "collection_date",
     "lab_name",
     "report_type",
