@@ -53,7 +53,7 @@ class XMLToExcelPage(tk.Frame):
         out_row = tk.Frame(s2, bg=BG_CARD)
         out_row.pack(fill="x", padx=15, pady=(0, 12))
 
-        self.output_var = tk.StringVar(value=str(APP_DIR / "KetQua_GiaiMa_XML4.xlsx"))
+        self.output_var = tk.StringVar(value=str(APP_DIR / "KetQua_GiaiMa_XML.xlsx"))
         entry = tk.Entry(out_row, textvariable=self.output_var, font=("Helvetica", 11),
                          bg=BG_INPUT, fg=FG_TEXT, insertbackground=FG_TEXT,
                          borderwidth=0, highlightthickness=1, highlightcolor=ACCENT_BLUE)

@@ -1,4 +1,4 @@
-"""Xử lý XML → Excel: giải mã Base64, trích xuất XML4, xuất Excel."""
+"""Xử lý XML → Excel: giải mã Base64, trích xuất mọi loại XML (trừ XML1), xuất Excel."""
 
 import os
 import logging
@@ -9,10 +9,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 log = logging.getLogger(__name__)
 
-PERSONAL_COLUMNS = [
-    "HO_TEN", "DIA_CHI", "DIEN_THOAI", "MA_THE",
-    "SO_CCCD", "NGAYSINH", "MA_LK", "MA_DICH_VU",
-]
+# Loại hồ sơ KHÔNG xuất ra Excel.
+SKIP_LOAIHOSO = {"XML1"}
+
+# Các cột thông tin cá nhân / định danh bệnh nhân -> luôn loại bỏ.
+# Lưu ý: MA_LK (mã liên kết hồ sơ) là mã ẩn danh dùng để nối các bản ghi
+# của cùng một lần khám giữa các loại XML nên KHÔNG nằm trong danh sách này.
+PERSONAL_COLUMNS = {
+    "HO_TEN", "TEN_BENH_NHAN", "DIA_CHI", "DIACHI",
+    "DIEN_THOAI", "DIENTHOAI", "MA_THE", "MA_THE_BHYT",
+    "SO_CCCD", "CCCD", "SO_CMND", "CMND",
+    "NGAYSINH", "NGAY_SINH",
+}
 
 
 def decode_base64_content(b64_string):
@@ -97,7 +105,7 @@ def process_xml_file(xml_filepath):
         if loai_node is None or content_node is None:
             continue
         loai_hoso = loai_node.text.strip() if loai_node.text else "UNKNOWN"
-        if loai_hoso != "XML4":
+        if loai_hoso in SKIP_LOAIHOSO:
             continue
         b64_content = content_node.text.strip() if content_node.text else ""
         if not b64_content:
@@ -114,8 +122,16 @@ def process_xml_file(xml_filepath):
     return results
 
 
+def _sheet_columns(records):
+    """Trả về danh sách cột cho 1 sheet: ID đứng đầu, bỏ cột cá nhân."""
+    all_keys = list(dict.fromkeys(k for r in records for k in r))
+    filtered_keys = [k for k in all_keys
+                     if k not in PERSONAL_COLUMNS and k != "ID"]
+    return ["ID"] + filtered_keys
+
+
 def run_xml_to_excel(xml_files, output_path, callback):
-    """Xử lý danh sách XML files song song và xuất Excel."""
+    """Xử lý danh sách XML files song song và xuất Excel (mỗi loại XML 1 sheet)."""
     try:
         from openpyxl import Workbook
         all_results = defaultdict(list)
@@ -132,24 +148,30 @@ def run_xml_to_excel(xml_files, output_path, callback):
                 except Exception as e:
                     log.warning("Lỗi xử lý %s: %s", xf, e)
 
-        records = all_results.get("XML4", [])
-        if not records:
-            callback(False, "Không có dữ liệu XML4 trong các file đã chọn!")
+        if not all_results:
+            callback(False, "Không có dữ liệu XML (ngoài XML1) trong các file đã chọn!")
             return
 
-        all_keys = list(dict.fromkeys(k for r in records for k in r))
-        filtered_keys = [k for k in all_keys if k not in PERSONAL_COLUMNS]
-        if "ID" in filtered_keys:
-            filtered_keys.remove("ID")
-        columns = ["ID"] + filtered_keys
-
         wb = Workbook()
-        ws = wb.active
-        ws.title = "XML4"
-        ws.append(columns)
-        for rec in records:
-            ws.append([rec.get(c, "") for c in columns])
+        wb.remove(wb.active)  # bỏ sheet mặc định, tạo sheet theo từng loại XML
+        total = 0
+        for loai in sorted(all_results):
+            records = all_results[loai]
+            if not records:
+                continue
+            ws = wb.create_sheet(title=loai[:31])
+            columns = _sheet_columns(records)
+            ws.append(columns)
+            for rec in records:
+                ws.append([rec.get(c, "") for c in columns])
+            total += len(records)
+
+        if not wb.sheetnames:
+            callback(False, "Không có bản ghi nào để xuất!")
+            return
+
         wb.save(output_path)
-        callback(True, f"Hoàn thành! {len(records)} bản ghi đã xuất.")
+        sheets = ", ".join(wb.sheetnames)
+        callback(True, f"Hoàn thành! {total} bản ghi đã xuất ({len(wb.sheetnames)} sheet: {sheets}).")
     except Exception as e:
         callback(False, f"Lỗi: {e}")
