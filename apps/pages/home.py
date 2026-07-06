@@ -31,7 +31,7 @@ class HomePage(tk.Frame):
         from apps.pages.upload import UploadPDFPage
 
         btn_data = [
-            ("Xử lý XML → Excel", "Giải mã & xuất dữ liệu XML4 thành file Excel",
+            ("Xử lý XML → Excel", "Giải mã dữ liệu XML3, XML4 thành file Excel",
              ACCENT_BLUE, BTN_HOVER_BLUE, XMLToExcelPage),
             ("Xử lý ảnh X-Quang", "Xóa text burned-in + anonymize metadata DICOM",
              ACCENT_ORANGE, BTN_HOVER_ORANGE, XRayPage),

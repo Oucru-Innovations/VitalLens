@@ -1,4 +1,7 @@
-"""Xử lý XML → Excel: giải mã Base64, trích xuất mọi loại XML (trừ XML1), xuất Excel."""
+"""Xử lý XML → Excel: giải mã Base64 các FILEHOSO loại XML3/XML4, xuất Excel.
+
+Không lọc cột nào — giải mã và xuất nguyên trạng, mỗi loại 1 sheet.
+"""
 
 import os
 import logging
@@ -7,20 +10,12 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from apps.services.excel_export import sanitize_sheet_name
+
 log = logging.getLogger(__name__)
 
-# Loại hồ sơ KHÔNG xuất ra Excel.
-SKIP_LOAIHOSO = {"XML1"}
-
-# Các cột thông tin cá nhân / định danh bệnh nhân -> luôn loại bỏ.
-# Lưu ý: MA_LK (mã liên kết hồ sơ) là mã ẩn danh dùng để nối các bản ghi
-# của cùng một lần khám giữa các loại XML nên KHÔNG nằm trong danh sách này.
-PERSONAL_COLUMNS = {
-    "HO_TEN", "TEN_BENH_NHAN", "DIA_CHI", "DIACHI",
-    "DIEN_THOAI", "DIENTHOAI", "MA_THE", "MA_THE_BHYT",
-    "SO_CCCD", "CCCD", "SO_CMND", "CMND",
-    "NGAYSINH", "NGAY_SINH",
-}
+# Chỉ xuất các loại hồ sơ này ra Excel.
+ALLOWED_LOAIHOSO = {"XML3", "XML4"}
 
 
 def decode_base64_content(b64_string):
@@ -104,8 +99,8 @@ def process_xml_file(xml_filepath):
         content_node = fh.find("NOIDUNGFILE")
         if loai_node is None or content_node is None:
             continue
-        loai_hoso = loai_node.text.strip() if loai_node.text else "UNKNOWN"
-        if loai_hoso in SKIP_LOAIHOSO:
+        loai_hoso = (loai_node.text or "").strip()
+        if loai_hoso not in ALLOWED_LOAIHOSO:
             continue
         b64_content = content_node.text.strip() if content_node.text else ""
         if not b64_content:
@@ -116,6 +111,8 @@ def process_xml_file(xml_filepath):
         records = parse_inner_xml(decoded_xml)
         file_id = os.path.splitext(filename)[0]
         for rec in records:
+            if "ID" in rec:
+                rec["ID_GOC"] = rec["ID"]
             rec["ID"] = file_id
         results[loai_hoso].extend(records)
 
@@ -123,55 +120,56 @@ def process_xml_file(xml_filepath):
 
 
 def _sheet_columns(records):
-    """Trả về danh sách cột cho 1 sheet: ID đứng đầu, bỏ cột cá nhân."""
+    """Trả về danh sách cột cho 1 sheet: ID đứng đầu, giữ nguyên mọi cột còn lại."""
     all_keys = list(dict.fromkeys(k for r in records for k in r))
-    filtered_keys = [k for k in all_keys
-                     if k not in PERSONAL_COLUMNS and k != "ID"]
-    return ["ID"] + filtered_keys
+    return ["ID"] + [k for k in all_keys if k != "ID"]
+
+
+def _collect_and_save(xml_files, output_path):
+    from openpyxl import Workbook
+
+    all_results = defaultdict(list)
+    max_workers = min(8, len(xml_files), os.cpu_count() or 4)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        future_to_file = {pool.submit(process_xml_file, xf): xf for xf in xml_files}
+        for future in as_completed(future_to_file):
+            xf = future_to_file[future]
+            try:
+                file_results = future.result()
+                for loai, records in file_results.items():
+                    all_results[loai].extend(records)
+            except Exception as e:
+                log.warning("Lỗi xử lý %s: %s", xf, e)
+
+    if not all_results:
+        return False, "Không có dữ liệu XML trong các file đã chọn!"
+
+    wb = Workbook()
+    wb.remove(wb.active)  # bỏ sheet mặc định, tạo sheet theo từng loại XML
+    total = 0
+    for loai in sorted(all_results):
+        records = all_results[loai]
+        if not records:
+            continue
+        ws = wb.create_sheet(title=sanitize_sheet_name(loai, default="Sheet"))
+        columns = _sheet_columns(records)
+        ws.append(columns)
+        for rec in records:
+            ws.append([rec.get(c, "") for c in columns])
+        total += len(records)
+
+    if not wb.sheetnames:
+        return False, "Không có bản ghi nào để xuất!"
+
+    wb.save(output_path)
+    sheets = ", ".join(wb.sheetnames)
+    return True, f"Hoàn thành! {total} bản ghi đã xuất ({len(wb.sheetnames)} sheet: {sheets})."
 
 
 def run_xml_to_excel(xml_files, output_path, callback):
     """Xử lý danh sách XML files song song và xuất Excel (mỗi loại XML 1 sheet)."""
     try:
-        from openpyxl import Workbook
-        all_results = defaultdict(list)
-
-        max_workers = min(8, len(xml_files), os.cpu_count() or 4)
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            future_to_file = {pool.submit(process_xml_file, xf): xf for xf in xml_files}
-            for future in as_completed(future_to_file):
-                xf = future_to_file[future]
-                try:
-                    file_results = future.result()
-                    for loai, records in file_results.items():
-                        all_results[loai].extend(records)
-                except Exception as e:
-                    log.warning("Lỗi xử lý %s: %s", xf, e)
-
-        if not all_results:
-            callback(False, "Không có dữ liệu XML (ngoài XML1) trong các file đã chọn!")
-            return
-
-        wb = Workbook()
-        wb.remove(wb.active)  # bỏ sheet mặc định, tạo sheet theo từng loại XML
-        total = 0
-        for loai in sorted(all_results):
-            records = all_results[loai]
-            if not records:
-                continue
-            ws = wb.create_sheet(title=loai[:31])
-            columns = _sheet_columns(records)
-            ws.append(columns)
-            for rec in records:
-                ws.append([rec.get(c, "") for c in columns])
-            total += len(records)
-
-        if not wb.sheetnames:
-            callback(False, "Không có bản ghi nào để xuất!")
-            return
-
-        wb.save(output_path)
-        sheets = ", ".join(wb.sheetnames)
-        callback(True, f"Hoàn thành! {total} bản ghi đã xuất ({len(wb.sheetnames)} sheet: {sheets}).")
+        success, msg = _collect_and_save(xml_files, output_path)
     except Exception as e:
-        callback(False, f"Lỗi: {e}")
+        success, msg = False, f"Lỗi: {e}"
+    callback(success, msg)

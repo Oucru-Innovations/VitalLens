@@ -15,7 +15,7 @@ import re
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, ttk
 
 from apps.config import (
     ACCENT_BLUE,
@@ -45,7 +45,15 @@ from apps.services.storage import (
     StorageBackend,
     safe_is_dir,
 )
-from apps.widgets import StatusBar, StyledButton, make_header, make_section
+from apps.widgets import (
+    StatusBar,
+    StyledButton,
+    make_header,
+    make_section,
+    ScrollableFrame,
+    show_info,
+    show_warning,
+)
 
 from .form_builder import (
     LabFormState,
@@ -102,8 +110,9 @@ class OCRPage(tk.Frame):
         # --- Build UI ---
         make_header(self, controller, "Đánh giá kết quả OCR")
 
-        self.body = tk.Frame(self, bg=BG_MAIN)
-        self.body.pack(fill="both", expand=True)
+        self._body_scroll = ScrollableFrame(self, bg=BG_MAIN)
+        self._body_scroll.pack(fill="both", expand=True)
+        self.body = self._body_scroll.interior
         self._build_login_section()
 
         self.review_frame = tk.Frame(self, bg=BG_MAIN)
@@ -206,13 +215,13 @@ class OCRPage(tk.Frame):
         password = self.pass_var.get()
 
         if not host:
-            messagebox.showwarning("Thiếu thông tin", "Chưa cấu hình host SFTP trong code.")
+            show_warning(self, "Thiếu thông tin", "Chưa cấu hình host SFTP trong code.")
             return
         if not username:
-            messagebox.showwarning("Thiếu thông tin", "Vui lòng nhập username.")
+            show_warning(self, "Thiếu thông tin", "Vui lòng nhập username.")
             return
         if not password:
-            messagebox.showwarning("Thiếu thông tin", "Vui lòng nhập password.")
+            show_warning(self, "Thiếu thông tin", "Vui lòng nhập password.")
             return
 
         self.connect_btn.set_state("disabled")
@@ -355,7 +364,8 @@ class OCRPage(tk.Frame):
         else:
             self.root_dir = SFTP_PATH
             if not self.root_dir:
-                messagebox.showwarning(
+                show_warning(
+                    self,
                     "Thiếu cấu hình",
                     f"Chưa cấu hình đường dẫn SFTP cho {ocr_type}.",
                 )
@@ -962,8 +972,8 @@ class OCRPage(tk.Frame):
     def _export_lab_excel(self) -> None:
         selected_type = self.lab_type_var.get().strip() or LAB_VALIDATE_TYPES[0]
         if selected_type == LAB_VALIDATE_TYPES[0]:
-            messagebox.showwarning(
-                "Chọn loại", "Vui lòng chọn 1 loại cụ thể để export."
+            show_warning(
+                self, "Chọn loại", "Vui lòng chọn 1 loại cụ thể để export."
             )
             return
 
@@ -974,7 +984,8 @@ class OCRPage(tk.Frame):
             and record["status"] == "validated"
         ]
         if not records:
-            messagebox.showwarning(
+            show_warning(
+                self,
                 "Không có dữ liệu",
                 f"Chưa có hồ sơ validated cho loại {selected_type}.",
             )
@@ -1026,7 +1037,8 @@ class OCRPage(tk.Frame):
             )
 
         if not rows:
-            messagebox.showwarning(
+            show_warning(
+                self,
                 "Không có dữ liệu",
                 f"Không đọc được CSV validated cho loại {selected_type}.",
             )
@@ -1059,7 +1071,8 @@ class OCRPage(tk.Frame):
             "chuyển file sang trạng thái done",
             "success",
         )
-        messagebox.showinfo(
+        show_info(
+            self,
             "Thành công",
             f"Đã export loại {selected_type}: {len(rows)} dòng dữ liệu",
         )
@@ -1324,8 +1337,8 @@ class OCRPage(tk.Frame):
             return
 
         if not confirmed_files:
-            messagebox.showwarning(
-                "Không có dữ liệu", "Chưa có folder nào được xác nhận."
+            show_warning(
+                self, "Không có dữ liệu", "Chưa có folder nào được xác nhận."
             )
             return
 
@@ -1354,8 +1367,8 @@ class OCRPage(tk.Frame):
             self.review_status.set(
                 f"Đã xuất {row_count} dòng, {cnt} folder hoàn thành", "success"
             )
-            messagebox.showinfo(
-                "Thành công", f"Đã xuất {row_count} dòng dữ liệu"
+            show_info(
+                self, "Thành công", f"Đã xuất {row_count} dòng dữ liệu"
             )
         except Exception as e:  # noqa: BLE001
             self.review_status.set(f"Lỗi xuất Excel: {e}", "error")

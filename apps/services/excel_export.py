@@ -6,7 +6,7 @@ import re
 from typing import Iterable, List
 
 
-def _sanitize_sheet_name(name: str, default: str = "Sheet1") -> str:
+def sanitize_sheet_name(name: str, default: str = "Sheet1") -> str:
     cleaned = re.sub(r"[^A-Za-z0-9 _-]+", "_", name).strip() or default
     return cleaned[:31]
 
@@ -34,7 +34,7 @@ def write_rows_to_xlsx(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = _sanitize_sheet_name(sheet_name)
+    ws.title = sanitize_sheet_name(sheet_name)
 
     cols = columns or collect_columns(rows)
     ws.append(cols)
@@ -45,4 +45,4 @@ def write_rows_to_xlsx(
     return len(rows)
 
 
-__all__ = ["write_rows_to_xlsx", "collect_columns"]
+__all__ = ["write_rows_to_xlsx", "collect_columns", "sanitize_sheet_name"]

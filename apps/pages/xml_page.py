@@ -3,14 +3,17 @@
 import os
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 
 from apps.config import (
     APP_DIR, BG_MAIN, BG_CARD, BG_INPUT, FG_TEXT, FG_DIM,
     ACCENT_BLUE, ACCENT_ORANGE, ACCENT_GREEN,
     BTN_HOVER_BLUE, BTN_HOVER_ORANGE, BTN_HOVER_GREEN,
 )
-from apps.widgets import StyledButton, StatusBar, make_header, make_section
+from apps.widgets import (
+    StyledButton, StatusBar, make_header, make_section,
+    ScrollableFrame, show_info, show_warning, show_error,
+)
 from apps.processing.xml_to_excel import run_xml_to_excel
 
 
@@ -22,8 +25,9 @@ class XMLToExcelPage(tk.Frame):
 
         make_header(self, controller, "Xử lý XML → Excel")
 
-        body = tk.Frame(self, bg=BG_MAIN)
-        body.pack(fill="both", expand=True)
+        scroll = ScrollableFrame(self, bg=BG_MAIN)
+        scroll.pack(fill="both", expand=True)
+        body = scroll.interior
 
         # === Section 1: Chọn file ===
         s1 = make_section(body, "BƯỚC 1 — Chọn file XML đầu vào")
@@ -100,11 +104,11 @@ class XMLToExcelPage(tk.Frame):
 
     def _run(self):
         if not self.xml_files:
-            messagebox.showwarning("Thiếu dữ liệu", "Vui lòng chọn ít nhất 1 file XML.")
+            show_warning(self, "Thiếu dữ liệu", "Vui lòng chọn ít nhất 1 file XML.")
             return
         output = self.output_var.get().strip()
         if not output:
-            messagebox.showwarning("Thiếu đường dẫn", "Vui lòng chọn nơi lưu file Excel.")
+            show_warning(self, "Thiếu đường dẫn", "Vui lòng chọn nơi lưu file Excel.")
             return
 
         self.run_btn.set_state("disabled")
@@ -119,7 +123,7 @@ class XMLToExcelPage(tk.Frame):
         self.run_btn.set_state("normal")
         if success:
             self.status.set(msg, "success")
-            messagebox.showinfo("Thành công", msg)
+            show_info(self, "Thành công", msg)
         else:
             self.status.set(msg, "error")
-            messagebox.showerror("Lỗi", msg)
+            show_error(self, "Lỗi", msg)

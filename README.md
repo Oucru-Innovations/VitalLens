@@ -6,7 +6,7 @@ VitalLens is a Python/Tkinter desktop app for medical data processing. The proje
 
 | Module | Purpose |
 | --- | --- |
-| XML → Excel | Decode Base64 payloads from BHYT XML files, extract `XML4`, and export Excel |
+| XML → Excel | Decode Base64 payloads from BHYT XML files (`XML3`/`XML4` only, no column filtering) and export one Excel sheet per type |
 | X-Ray Anonymization | Detect burned-in text with PaddleOCR and anonymize DICOM metadata |
 | OCR Review | Review OCR output from LAB / bedside monitor folders, correct JSON, and export Excel |
 | Lab PDF Upload | View PDFs, redact sensitive regions, fill metadata, save PDF + CSV, and optionally upload via API |

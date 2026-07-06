@@ -53,6 +53,35 @@ def setup_logging(level: int | str = logging.INFO) -> None:
         logging.getLogger(name).setLevel(logging.ERROR)
 
 
+def patch_windows_ssl_cert_store() -> None:
+    """Bỏ qua chứng chỉ lỗi trong Windows Certificate Store.
+
+    Một số máy Windows có chứng chỉ bị lỗi định dạng ASN.1 trong hệ thống
+    (thường do phần mềm antivirus/proxy công ty cài vào). Khi đó
+    ``ssl.create_default_context()`` ném ``SSLError: [ASN1: NOT_ENOUGH_DATA]``
+    ngay khi nạp toàn bộ store, dù ứng dụng chưa hề gọi mạng — làm sập việc
+    import ``aiohttp`` (qua ``paddleocr``) trước cả khi OCR chạy.
+    Phải gọi trước khi import bất kỳ thư viện nào tạo SSL context mặc định.
+    """
+
+    if sys.platform != "win32":
+        return
+    try:
+        import ssl
+
+        _original = ssl.SSLContext._load_windows_store_certs
+
+        def _safe_load_windows_store_certs(self, storename, purpose):
+            try:
+                _original(self, storename, purpose)
+            except ssl.SSLError:
+                pass
+
+        ssl.SSLContext._load_windows_store_certs = _safe_load_windows_store_certs
+    except Exception:
+        pass
+
+
 def patch_paddlex_when_frozen() -> None:
     """Bypass PaddleX dependency checks when running as a PyInstaller EXE.
 
@@ -74,4 +103,4 @@ def patch_paddlex_when_frozen() -> None:
         pass
 
 
-__all__ = ["setup_logging", "patch_paddlex_when_frozen"]
+__all__ = ["setup_logging", "patch_paddlex_when_frozen", "patch_windows_ssl_cert_store"]

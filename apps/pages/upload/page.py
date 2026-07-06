@@ -42,7 +42,16 @@ from apps.config import (
 )
 from apps.services.pdf_redact import save_redacted_pdf, temp_output_path
 from apps.services.upload_api import upload_pair
-from apps.widgets import DatePicker, StatusBar, StyledButton, make_header
+from apps.widgets import (
+    DatePicker,
+    ScrollableFrame,
+    StatusBar,
+    StyledButton,
+    make_header,
+    show_error,
+    show_info,
+    show_warning,
+)
 
 log = logging.getLogger(__name__)
 
@@ -430,8 +439,9 @@ class UploadPDFPage(tk.Frame):
             fill="x", padx=10, pady=5
         )
 
-        form = tk.Frame(right, bg=BG_CARD)
-        form.pack(fill="x", padx=10)
+        form_scroll = ScrollableFrame(right, bg=BG_CARD)
+        form_scroll.pack(fill="both", expand=True, padx=10)
+        form = form_scroll.interior
 
         self.form_vars: dict[str, tk.StringVar] = {}
         self.input_widgets: list = []
@@ -1073,27 +1083,27 @@ class UploadPDFPage(tk.Frame):
 
     def _save(self) -> None:
         if not self.current_file:
-            messagebox.showwarning("Chưa chọn file", "Vui lòng chọn file PDF trước.")
+            show_warning(self, "Chưa chọn file", "Vui lòng chọn file PDF trước.")
             return
 
         patient_code = self.form_vars["patient_code"].get().strip()
         if not patient_code:
-            messagebox.showwarning("Thiếu thông tin", "Vui lòng nhập Patient Code.")
+            show_warning(self, "Thiếu thông tin", "Vui lòng nhập Patient Code.")
             return
 
         type_val = self.form_vars["type"].get().strip()
         if type_val == "Other":
             type_val = self.form_vars["other_type"].get().strip()
         if not type_val:
-            messagebox.showwarning(
-                "Thiếu thông tin", "Vui lòng chọn hoặc nhập Type."
+            show_warning(
+                self, "Thiếu thông tin", "Vui lòng chọn hoặc nhập Type."
             )
             return
 
         output_dir = self.output_var.get().strip()
         if not output_dir:
-            messagebox.showwarning(
-                "Thiếu đường dẫn", "Vui lòng chọn thư mục lưu."
+            show_warning(
+                self, "Thiếu đường dẫn", "Vui lòng chọn thư mục lưu."
             )
             return
 
@@ -1334,7 +1344,8 @@ class UploadPDFPage(tk.Frame):
             return
 
         if not self.saved_exports:
-            messagebox.showinfo(
+            show_info(
+                self,
                 "Không có file",
                 "Chưa có cặp PDF + CSV nào trong Pending để upload.",
             )
@@ -1448,7 +1459,8 @@ class UploadPDFPage(tk.Frame):
                 f"Còn {len(self.saved_exports)} file pending.",
                 "error",
             )
-            messagebox.showerror(
+            show_error(
+                self,
                 "Upload có lỗi",
                 f"Đã upload {success_count}/{total} cặp file.\n\n"
                 f"Lỗi: {first_error}\n\n"

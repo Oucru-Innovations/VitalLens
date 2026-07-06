@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import ast; ast.parse\\(open\\('apps/processing/xml_to_excel.py', encoding='utf-8'\\).read\\(\\)\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('apps/services/excel_export.py', encoding='utf-8'\\).read\\(\\)\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('apps/pages/home.py', encoding='utf-8'\\).read\\(\\)\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)",
+      "Bash(PYTHONIOENCODING=utf-8 C:/Users/vinhc/AppData/Local/miniconda3/python.exe -c ' *)",
+      "Bash(C:/Users/vinhc/AppData/Local/miniconda3/python.exe -c ' *)"
+    ]
+  }
+}
