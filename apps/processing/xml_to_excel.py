@@ -1,11 +1,13 @@
 """Xử lý XML → Excel: giải mã Base64 các FILEHOSO loại XML3/XML4, xuất Excel.
 
-Không lọc cột nào — giải mã và xuất nguyên trạng, mỗi loại 1 sheet.
+XML3 chỉ lấy các cột trong XML3_COLUMNS; XML4 lấy hết trừ XML4_EXCLUDED_COLUMNS.
+Mỗi loại hồ sơ xuất ra 1 sheet riêng.
 """
 
 import os
 import logging
 import base64
+import gzip
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -17,16 +19,36 @@ log = logging.getLogger(__name__)
 # Chỉ xuất các loại hồ sơ này ra Excel.
 ALLOWED_LOAIHOSO = {"XML3", "XML4"}
 
+# XML3: chỉ lấy đúng các cột này (theo thứ tự, không lấy cột nào khác).
+XML3_COLUMNS = [
+    "MA_LK", "STT", "MA_DICH_VU", "MA_PTTT", "MA_VAT_TU",
+    "MA_NHOM", "GOI_YTYT", "TEN_VAT_TU", "TEN_DICH_VU",
+]
+
+# XML4: lấy hết các cột, trừ những cột này.
+XML4_EXCLUDED_COLUMNS = {"MA_BS_DOC_KQ"}
+
 
 def decode_base64_content(b64_string):
     try:
         decoded_bytes = base64.b64decode(b64_string)
-        try:
-            return decoded_bytes.decode("utf-8-sig")
-        except UnicodeDecodeError:
-            return decoded_bytes.decode("utf-8")
-    except Exception:
+    except Exception as e:
+        log.warning("Giải mã Base64 thất bại: %s", e)
         return None
+
+    try:
+        decoded_bytes = gzip.decompress(decoded_bytes)
+    except OSError:
+        pass  # nội dung không nén GZIP, dùng nguyên bytes đã giải Base64
+
+    try:
+        return decoded_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            return decoded_bytes.decode("utf-8")
+        except UnicodeDecodeError as e:
+            log.warning("Giải mã văn bản thất bại sau Base64/GZIP: %s", e)
+            return None
 
 
 def parse_inner_xml(xml_string):
@@ -119,9 +141,13 @@ def process_xml_file(xml_filepath):
     return results
 
 
-def _sheet_columns(records):
-    """Trả về danh sách cột cho 1 sheet: ID đứng đầu, giữ nguyên mọi cột còn lại."""
+def _sheet_columns(records, loai=None):
+    """Trả về danh sách cột cho 1 sheet: ID đứng đầu, phần còn lại tuỳ loại hồ sơ."""
     all_keys = list(dict.fromkeys(k for r in records for k in r))
+    if loai == "XML3":
+        return ["ID"] + [k for k in XML3_COLUMNS if k in all_keys]
+    if loai == "XML4":
+        return ["ID"] + [k for k in all_keys if k != "ID" and k not in XML4_EXCLUDED_COLUMNS]
     return ["ID"] + [k for k in all_keys if k != "ID"]
 
 
@@ -152,7 +178,7 @@ def _collect_and_save(xml_files, output_path):
         if not records:
             continue
         ws = wb.create_sheet(title=sanitize_sheet_name(loai, default="Sheet"))
-        columns = _sheet_columns(records)
+        columns = _sheet_columns(records, loai)
         ws.append(columns)
         for rec in records:
             ws.append([rec.get(c, "") for c in columns])
