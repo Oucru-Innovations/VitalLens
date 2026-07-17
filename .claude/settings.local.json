@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile apps/pages/upload/page.py apps/services/export_store.py apps/services/upload_api.py apps/app.py)",
+      "Bash(PYTHONUTF8=1 python -c ' *)",
+      "Bash(PYTHONUTF8=1 PYTHONPATH=\"c:/Users/vinhc/Documents/GitHub/VitalLens\" python -u \"C:\\\\Users\\\\vinhc\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-vinhc-Documents-GitHub-VitalLens\\\\ae186c30-ba3b-4e23-8a8f-851ba54ae4b1\\\\scratchpad\\\\test_flow.py\")",
+      "Bash(rm -f .vitallens_workspace.json)",
+      "Bash(python -m compileall -q apps main.py)"
+    ]
+  }
+}

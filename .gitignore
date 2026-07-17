@@ -39,5 +39,8 @@ output_xray/
 KetQua_*.xlsx
 OCR_*.xlsx
 
+# Per-user runtime state (last-used upload workspace folder)
+.vitallens_workspace.json
+
 # Logs
 *.log

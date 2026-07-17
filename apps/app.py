@@ -36,9 +36,21 @@ class App(tk.Tk):
             frame.place(relwidth=1, relheight=1)
 
         self.show_frame(HomePage)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def show_frame(self, page_class):
         self.frames[page_class].tkraise()
+
+    def _on_close(self):
+        # Cho các trang cơ hội dọn tài nguyên (đóng PDF handle, ...).
+        for frame in self.frames.values():
+            on_close = getattr(frame, "on_close", None)
+            if callable(on_close):
+                try:
+                    on_close()
+                except Exception:
+                    pass
+        self.destroy()
 
     def _apply_app_icon(self):
         icon_path = APP_DIR / "icon.ico"
