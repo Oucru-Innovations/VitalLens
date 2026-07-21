@@ -14,8 +14,10 @@ Mỗi cặp gồm 3 file:
     <display_name>.meta.json - "sổ cái" của cặp (nguồn dữ liệu chuẩn)
 
 `meta.json` là nguồn chuẩn để khôi phục state: nó ghi tên file pdf/csv, form
-đã nhập, các vùng tô đen, file gốc và cờ đã-gửi từng file (phục vụ retry
-không gửi trùng). Quét thư mục = tìm mọi `*.meta.json` rồi dựng lại danh sách.
+đã nhập, các vùng tô đen, file gốc, cờ đã-gửi từng file (phục vụ retry không
+gửi trùng) và nhật ký upload (`attempts`, `last_error`, `last_attempt_at`,
+`uploaded_at`) để hiển thị "cặp nào chưa lên và vì sao" sau khi mở lại app.
+Quét thư mục = tìm mọi `*.meta.json` rồi dựng lại danh sách.
 """
 
 from __future__ import annotations
@@ -95,6 +97,12 @@ def write_meta(folder: str, export: dict) -> str:
         "redactions": _redactions_to_json(export.get("redactions", {})),
         "pdf_sent": bool(export.get("pdf_sent", False)),
         "csv_sent": bool(export.get("csv_sent", False)),
+        # Nhật ký upload: giúp sau khi mở lại app vẫn biết cặp nào từng lỗi,
+        # lỗi gì và đã thử bao nhiêu lần.
+        "attempts": int(export.get("attempts", 0) or 0),
+        "last_error": export.get("last_error", "") or "",
+        "last_attempt_at": export.get("last_attempt_at", "") or "",
+        "uploaded_at": export.get("uploaded_at", "") or "",
     }
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, _meta_name(export["display_name"]))
@@ -140,6 +148,10 @@ def _load_folder(folder: str) -> List[dict]:
                 "redactions": _redactions_from_json(meta.get("redactions", {})),
                 "pdf_sent": bool(meta.get("pdf_sent", False)),
                 "csv_sent": bool(meta.get("csv_sent", False)),
+                "attempts": int(meta.get("attempts", 0) or 0),
+                "last_error": meta.get("last_error", "") or "",
+                "last_attempt_at": meta.get("last_attempt_at", "") or "",
+                "uploaded_at": meta.get("uploaded_at", "") or "",
             }
         )
     return exports

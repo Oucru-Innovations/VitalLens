@@ -90,6 +90,23 @@ def _parse_env_file_manually(env_path: Path) -> None:
         pass
 
 
+# Tên biến chứa bí mật — chỉ được log "đã đặt / chưa đặt", KHÔNG bao giờ log giá trị.
+_SECRET_KEYS = frozenset({"API_BEARER_TOKEN", "SFTP_PASSWORD"})
+
+# Bật ghi file chẩn đoán bằng: set VITALLENS_DEBUG_CONFIG=1
+_DEBUG_CONFIG_ENV = "VITALLENS_DEBUG_CONFIG"
+
+
+def _redact(key: str, value: str) -> str:
+    """Giá trị an toàn để ghi log: bí mật chỉ lộ độ dài, không lộ nội dung."""
+
+    if not value:
+        return "(empty)"
+    if key in _SECRET_KEYS:
+        return f"(set, len={len(value)})"
+    return f"'{value}'"
+
+
 def _load_dotenv_if_present(app_dir: Path) -> None:
     """Load a dotenv config file if one exists.
 
@@ -102,12 +119,32 @@ def _load_dotenv_if_present(app_dir: Path) -> None:
 
     When ``python-dotenv`` is not importable (common in PyInstaller
     bundles), falls back to a simple built-in parser.
+
+    Chẩn đoán: chỉ ghi ``config_debug.log`` khi biến môi trường
+    ``VITALLENS_DEBUG_CONFIG`` được bật, và **không bao giờ** ghi nội dung
+    ``.env`` — chỉ tên khoá đọc được, giá trị bí mật thì redact. Trước đây hàm
+    này dump nguyên văn từng dòng .env (gồm cả bearer token) ra file cạnh EXE.
     """
 
-    # --- Debug: ghi ra file log cạnh EXE để trace .env loading ---
+    # --- Debug: chỉ thu thập khi được bật tường minh ---
+    debug_on = os.environ.get(_DEBUG_CONFIG_ENV, "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
     _debug_lines: list[str] = []
+
     def _dbg(msg: str) -> None:
-        _debug_lines.append(msg)
+        if debug_on:
+            _debug_lines.append(msg)
+
+    def _flush() -> None:
+        if not debug_on:
+            return
+        try:
+            (app_dir / "config_debug.log").write_text(
+                "\n".join(_debug_lines), encoding="utf-8"
+            )
+        except OSError:
+            pass
 
     _dbg(f"APP_DIR  = {app_dir}")
     _dbg(f"frozen   = {getattr(sys, 'frozen', False)}")
@@ -124,25 +161,10 @@ def _load_dotenv_if_present(app_dir: Path) -> None:
 
     if env_path is None:
         _dbg("RESULT   : No .env file found!")
-        # Ghi debug log
-        try:
-            (app_dir / "config_debug.log").write_text(
-                "\n".join(_debug_lines), encoding="utf-8"
-            )
-        except OSError:
-            pass
+        _flush()
         return
 
-    _dbg(f"Loading  : {env_path}")
-
-    # Đọc raw content để kiểm tra
-    try:
-        raw = env_path.read_text(encoding="utf-8")
-        _dbg(f"Raw .env ({len(raw)} bytes):")
-        for line in raw.splitlines():
-            _dbg(f"  | {line}")
-    except OSError as e:
-        _dbg(f"Read err : {e}")
+    _dbg(f"Loading  : {env_path} ({env_path.stat().st_size} bytes)")
 
     try:
         from dotenv import load_dotenv
@@ -153,18 +175,10 @@ def _load_dotenv_if_present(app_dir: Path) -> None:
         _parse_env_file_manually(env_path)
         _dbg("Parser   : built-in (dotenv not available)")
 
-    url_val = os.environ.get("API_UPLOAD_URL", "")
-    token_val = os.environ.get("API_BEARER_TOKEN", "")
-    _dbg(f"RESULT   : API_UPLOAD_URL = '{url_val}'")
-    _dbg(f"RESULT   : API_BEARER_TOKEN = {'(set, len=' + str(len(token_val)) + ')' if token_val else '(empty)'}")
+    for key in ("API_UPLOAD_URL", "API_BEARER_TOKEN", "API_UPLOAD_OWNER"):
+        _dbg(f"RESULT   : {key} = {_redact(key, os.environ.get(key, ''))}")
 
-    # Ghi debug log
-    try:
-        (app_dir / "config_debug.log").write_text(
-            "\n".join(_debug_lines), encoding="utf-8"
-        )
-    except OSError:
-        pass
+    _flush()
 
 
 _load_dotenv_if_present(APP_DIR)
@@ -224,6 +238,30 @@ class Settings:
 
 
 SETTINGS: Settings = Settings.from_env()
+
+
+def _warn_insecure_endpoint(settings: Settings) -> None:
+    """Cảnh báo khi bearer token sẽ đi qua kênh không mã hoá.
+
+    ``http://`` gửi header ``Authorization`` dạng cleartext — bất kỳ ai trên
+    cùng đường truyền đều đọc được token lẫn dữ liệu bệnh nhân. Localhost thì
+    bỏ qua vì không ra khỏi máy.
+    """
+
+    url = (settings.api_upload_url or "").strip().lower()
+    if not url or not url.startswith("http://"):
+        return
+    host = url[len("http://"):].split("/", 1)[0].split(":", 1)[0]
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        return
+    log.warning(
+        "API_UPLOAD_URL dùng http:// (host=%s) — bearer token và dữ liệu bệnh "
+        "nhân sẽ đi qua mạng KHÔNG mã hoá. Hãy chuyển sang https://.",
+        host,
+    )
+
+
+_warn_insecure_endpoint(SETTINGS)
 
 # =====================================================================
 # Legacy flat constants (backward compatibility)

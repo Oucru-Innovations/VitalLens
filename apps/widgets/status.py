@@ -27,12 +27,14 @@ class StatusBar(tk.Frame):
         colors = {
             "info": FG_DIM,
             "success": ACCENT_GREEN,
+            "warning": ACCENT_ORANGE,
             "error": ACCENT_RED,
             "working": ACCENT_ORANGE,
         }
         icons = {
             "info": "",
             "success": "✓  ",
+            "warning": "⚠  ",
             "error": "✗  ",
             "working": "⟳  ",
         }

@@ -12,6 +12,11 @@ Chia trách nhiệm:
 
 Người dùng tick ☑ chọn từng cặp muốn upload; upload xong cặp nào thì file cặp
 đó được chuyển từ thư mục pending sang uploaded.
+
+Upload theo lô **không dừng khi gặp lỗi**: một cặp hỏng không chặn các cặp còn
+lại. Cặp lỗi ở lại Pending kèm lý do (`last_error`) + số lần đã thử, vẫn được
+tick sẵn để lần sau bấm Upload là thử lại đúng những cặp đó. Kết thúc lô luôn
+hiện báo cáo "cặp nào đã lên / cặp nào chưa và vì sao".
 """
 
 from __future__ import annotations
@@ -50,7 +55,7 @@ from apps.config import (
 )
 from apps.services import export_store
 from apps.services.pdf_redact import save_redacted_pdf, temp_output_path
-from apps.services.upload_api import upload_pair
+from apps.services.upload_api import make_session, upload_pair
 from apps.widgets import (
     DatePicker,
     ScrollableFrame,
@@ -59,6 +64,7 @@ from apps.widgets import (
     make_header,
     show_error,
     show_info,
+    show_report,
     show_warning,
 )
 
@@ -66,6 +72,9 @@ log = logging.getLogger(__name__)
 
 SAVE_RENDER_SCALE = 3.0
 TYPE_OPTIONS = ("Hematology", "Biochemistry", "Microbiology", "Other")
+
+# Thời gian tối đa chờ thread upload dừng khi đóng app (giây).
+SHUTDOWN_JOIN_TIMEOUT = 10.0
 
 # Naming rule: [DropdownType][Image/Metadata]_[PatientCode]_[dd.MM.yyyy.HH.mm.ss].<ext>
 
@@ -79,6 +88,26 @@ def _csv_safe(value: str) -> str:
     if value and value[0] in _CSV_FORMULA_PREFIXES:
         return "'" + value
     return value
+
+
+def _now_stamp() -> str:
+    """Mốc thời gian đọc được cho nhật ký upload trong meta.json."""
+
+    return datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+
+
+def _upload_record(
+    exp: dict, ok: bool, message: str, cancelled: bool = False
+) -> dict:
+    """Một dòng kết quả upload để dựng báo cáo cuối lô."""
+
+    return {
+        "id": exp["id"],
+        "name": exp["display_name"],
+        "ok": ok,
+        "message": message,
+        "cancelled": cancelled,
+    }
 
 
 def _norm_path(path: str) -> str:
@@ -148,6 +177,11 @@ class UploadPDFPage(tk.Frame):
 
         # Cờ bận: chặn thao tác khi đang lưu/upload chạy nền.
         self._busy = False
+
+        # Hủy lô upload giữa chừng (bấm Hủy hoặc đóng app) + tham chiếu thread
+        # nền để chờ nó dừng hẳn trước khi thoát.
+        self._cancel_event: threading.Event | None = None
+        self._worker: threading.Thread | None = None
 
         # Hàng đợi để thread nền gửi callback về main thread (Tkinter không
         # thread-safe → chỉ đụng widget ở main thread qua poller này).
@@ -347,6 +381,16 @@ class UploadPDFPage(tk.Frame):
             font_size=12,
         )
         self.upload_btn.pack(padx=10, pady=10, fill="x")
+
+        # Chỉ hiện khi đang upload: cho phép dừng lô mà không phải giết app.
+        self.cancel_btn = StyledButton(
+            bottom,
+            text="✕  Hủy upload",
+            command=self._cancel_upload,
+            bg_color=ACCENT_RED,
+            hover_color="#b91c1c",
+            font_size=12,
+        )
 
         return left
 
@@ -930,6 +974,17 @@ class UploadPDFPage(tk.Frame):
                 self._restore_form_data(view_path)
                 self._render_current_page()
 
+            # Đặt sau _load_pdf vì hàm đó cũng ghi status.
+            last_error = exp.get("last_error")
+            if last_error and self.view_mode == "pending":
+                attempts = int(exp.get("attempts", 0) or 0)
+                at = exp.get("last_attempt_at") or "?"
+                self.status.set(
+                    f"Cặp này CHƯA upload được (đã thử {attempts} lần, "
+                    f"lần cuối {at}): {last_error}",
+                    "error",
+                )
+
         self.file_listbox.selection_clear(0, "end")
 
     def _export_view_path(self, exp: dict) -> str | None:
@@ -943,6 +998,24 @@ class UploadPDFPage(tk.Frame):
             return pdf_path
         return original or pdf_path
 
+    def _pending_status(self, exp: dict) -> tuple[str, str]:
+        """(nhãn trạng thái, màu chữ) cho một cặp đang ở Pending.
+
+        Phân biệt rõ "chưa gửi lần nào" với "đã thử mà lỗi" và "gửi được một
+        nửa" — để nhìn danh sách là biết ngay cặp nào cần chú ý.
+        """
+
+        pdf_sent = bool(exp.get("pdf_sent"))
+        csv_sent = bool(exp.get("csv_sent"))
+        attempts = int(exp.get("attempts", 0) or 0)
+
+        if pdf_sent != csv_sent:
+            missing = "CSV" if pdf_sent else "PDF"
+            return f"[Gửi dở — còn {missing}]", ACCENT_ORANGE
+        if exp.get("last_error"):
+            return f"[Lỗi ×{attempts} — chờ thử lại]", ACCENT_RED
+        return "[Chờ Upload]", FG_TEXT
+
     def _refresh_pending_list(self) -> None:
         self.pending_listbox.delete(0, "end")
         data_list = (
@@ -955,16 +1028,22 @@ class UploadPDFPage(tk.Frame):
             valid_ids = {exp["id"] for exp in self.saved_exports}
             self.upload_checked &= valid_ids
 
-        suffix = "[Chờ Upload]" if is_pending else "[Đã Upload]"
+        n_problem = 0
         for exp in data_list:
             if is_pending:
                 box = "☑" if exp["id"] in self.upload_checked else "☐"
+                suffix, color = self._pending_status(exp)
+                if color != FG_TEXT:
+                    n_problem += 1
                 self.pending_listbox.insert(
                     "end", f" {box}  🏷 {exp['display_name']} {suffix}"
                 )
+                self.pending_listbox.itemconfig(
+                    self.pending_listbox.size() - 1, fg=color
+                )
             else:
                 self.pending_listbox.insert(
-                    "end", f"  🏷 {exp['display_name']} {suffix}"
+                    "end", f"  🏷 {exp['display_name']} [Đã Upload]"
                 )
 
         # Giữ lại highlight cho cặp đang xem.
@@ -976,9 +1055,16 @@ class UploadPDFPage(tk.Frame):
             self.pending_listbox.selection_set(self.current_export_idx)
 
         count = len(data_list)
-        self.pending_count_lbl.config(
-            text=f"{count} file (cặp)", fg=ACCENT_GREEN if count else FG_DIM
-        )
+        if is_pending and n_problem:
+            # Mọi cặp trong Pending đều chưa lên; n_problem là số cặp ĐÃ THỬ mà
+            # hỏng — nói "cần chú ý" để không ám chỉ phần còn lại đã upload.
+            self.pending_count_lbl.config(
+                text=f"{count} cặp • ⚠ {n_problem} cần chú ý", fg=ACCENT_RED
+            )
+        else:
+            self.pending_count_lbl.config(
+                text=f"{count} file (cặp)", fg=ACCENT_GREEN if count else FG_DIM
+            )
         if is_pending:
             n_checked = len(self.upload_checked)
             self.checked_count_lbl.config(
@@ -1468,9 +1554,14 @@ class UploadPDFPage(tk.Frame):
                     "display_name": display_name,
                     "form_data": snapshot_form,
                     "redactions": snapshot_redacts,
-                    # Nội dung đã đổi → coi như chưa gửi, cần upload lại.
+                    # Nội dung đã đổi → coi như chưa gửi, cần upload lại từ đầu
+                    # (xoá luôn nhật ký lỗi cũ vì nó nói về nội dung trước đó).
                     "pdf_sent": False,
                     "csv_sent": False,
+                    "attempts": 0,
+                    "last_error": "",
+                    "last_attempt_at": "",
+                    "uploaded_at": "",
                 }
             )
             select_idx = self.current_export_idx
@@ -1485,6 +1576,10 @@ class UploadPDFPage(tk.Frame):
                 "redactions": snapshot_redacts,
                 "pdf_sent": False,
                 "csv_sent": False,
+                "attempts": 0,
+                "last_error": "",
+                "last_attempt_at": "",
+                "uploaded_at": "",
             }
             self.saved_exports.append(exp)
             self.upload_checked.add(export_id)  # cặp mới mặc định được tick
@@ -1504,10 +1599,7 @@ class UploadPDFPage(tk.Frame):
             self.form_vars["date"].set(current_date)
             self._render_current_page()
 
-        try:
-            export_store.write_meta(pending, exp)
-        except OSError as e:
-            log.warning("Không ghi được meta: %s", e)
+        self._write_meta_quiet(pending, exp)
 
         self.saved_files.add(src_file)
         self._refresh_file_list()
@@ -1677,19 +1769,32 @@ class UploadPDFPage(tk.Frame):
             )
             if not messagebox.askyesno("Upload Demo", msg):
                 return
-            moved_ids = []
+            results = []
+            stamp = _now_stamp()
             for exp in targets:
+                exp["attempts"] = int(exp.get("attempts", 0) or 0) + 1
+                exp["last_attempt_at"] = stamp
+                # Đặt cờ TRƯỚC move_pair để write_meta bên trong nó ghi đúng
+                # ngay lần đầu (khỏi phải ghi meta lần thứ hai).
                 exp["pdf_sent"] = True
                 exp["csv_sent"] = True
+                exp["last_error"] = ""
+                exp["uploaded_at"] = stamp
                 try:
                     export_store.move_pair(exp, uploaded_folder)
-                    moved_ids.append(exp["id"])
                 except OSError as e:
+                    # Demo không có server → move hỏng nghĩa là chưa gửi gì cả,
+                    # trả cờ về False kẻo lần sau bị coi là đã gửi rồi.
                     log.warning("Demo move lỗi: %s", e)
-            self._finalize_upload(moved_ids, "", total)
-            self.status.set(
-                f"Demo: {len(moved_ids)} cặp đã chuyển sang Uploaded", "success"
-            )
+                    exp["pdf_sent"] = False
+                    exp["csv_sent"] = False
+                    exp["uploaded_at"] = ""
+                    exp["last_error"] = f"Không di chuyển được file: {e}"
+                    self._write_meta_quiet(pending_folder, exp)
+                    results.append(_upload_record(exp, False, exp["last_error"]))
+                    continue
+                results.append(_upload_record(exp, True, "Demo OK"))
+            self._finalize_upload(results, total, demo=True)
             return
 
         # --- Real upload ---
@@ -1706,70 +1811,164 @@ class UploadPDFPage(tk.Frame):
         if not messagebox.askyesno("Upload API", msg):
             return
 
-        def work():
-            moved_ids: list[str] = []
-            fail_msg = ""
-            for i, exp in enumerate(targets):
-                self._post(
-                    lambda idx=i, name=exp["display_name"]:
-                    self._upload_progress(idx, total, name)
-                )
-                send_pdf = not exp.get("pdf_sent")
-                send_csv = not exp.get("csv_sent")
-                res = upload_pair(
-                    API_UPLOAD_URL,
-                    API_BEARER_TOKEN,
-                    exp["pdf_path"],
-                    exp["csv_path"],
-                    owner=owner_email,
-                    send_pdf=send_pdf,
-                    send_csv=send_csv,
-                )
-                # Ghi nhớ file nào đã gửi (để retry không gửi trùng).
-                if res.pdf_ok:
-                    exp["pdf_sent"] = True
-                if res.csv_ok:
-                    exp["csv_sent"] = True
+        cancel_event = threading.Event()
+        self._cancel_event = cancel_event
 
-                if res.ok:
-                    try:
-                        export_store.move_pair(exp, uploaded_folder)
-                    except OSError as e:
-                        fail_msg = f"Đã gửi nhưng không di chuyển được file: {e}"
+        def work():
+            # Một session dùng chung cho cả lô: tái dùng kết nối TCP/TLS thay vì
+            # bắt tay lại cho từng file.
+            session = make_session()
+            results: list[dict] = []
+            try:
+                for i, exp in enumerate(targets):
+                    if cancel_event.is_set():
                         break
-                    moved_ids.append(exp["id"])
-                else:
-                    # Lưu lại cờ đã-gửi từng phần rồi dừng.
+                    self._post(
+                        lambda idx=i, name=exp["display_name"]:
+                        self._upload_progress(idx, total, name)
+                    )
                     try:
-                        export_store.write_meta(pending_folder, exp)
-                    except OSError:
+                        record = self._upload_one(
+                            exp, owner_email, session, cancel_event,
+                            uploaded_folder, pending_folder,
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        # Một cặp lỗi bất ngờ không được làm mất kết quả của
+                        # những cặp đã xong trước đó.
+                        log.exception(
+                            "Lỗi không mong đợi khi upload %s",
+                            exp.get("display_name"),
+                        )
+                        exp["last_error"] = f"Lỗi không mong đợi: {e}"
+                        self._write_meta_quiet(pending_folder, exp)
+                        record = _upload_record(exp, False, exp["last_error"])
+                    results.append(record)
+                    if record.get("cancelled"):
+                        break
+            finally:
+                if session is not None:
+                    try:
+                        session.close()
+                    except Exception:  # noqa: BLE001
                         pass
-                    fail_msg = res.message
-                    break
-            return moved_ids, fail_msg
+            return results
 
         def done(result, err):
             if err is not None:
+                # work() giờ bắt lỗi từng cặp, nên tới đây là lỗi ngoài vòng lặp.
                 log.error("Upload crashed: %s", err, exc_info=err)
-                self._set_busy(False)
-                self.status.set(f"Lỗi upload: {err}", "error")
+                self._finalize_upload([], total, error=str(err))
                 return
-            moved_ids, fail_msg = result
-            self._finalize_upload(moved_ids, fail_msg, total)
+            self._finalize_upload(result, total)
 
         self._set_busy(True, f"Đang upload {total} cặp...")
         self._progress_show(maximum=total)
+        self.cancel_btn.pack(padx=10, pady=(0, 10), fill="x")
+        self.cancel_btn.set_state("normal")
         self._run_async(work, done)
+
+    def _upload_one(
+        self,
+        exp: dict,
+        owner: str,
+        session,
+        cancel_event: threading.Event,
+        uploaded_folder: str,
+        pending_folder: str,
+    ) -> dict:
+        """Upload một cặp và cập nhật meta. Chạy ở thread nền.
+
+        Luôn trả về một record kết quả; mọi nhánh lỗi đều đã ghi `last_error`
+        xuống meta trước khi trả về, nên trạng thái trên đĩa luôn đúng kể cả
+        khi lô bị dừng ngay sau đó.
+        """
+
+        res = upload_pair(
+            API_UPLOAD_URL,
+            API_BEARER_TOKEN,
+            exp["pdf_path"],
+            exp["csv_path"],
+            owner=owner,
+            # Bỏ qua file đã gửi thành công ở lần trước.
+            send_pdf=not exp.get("pdf_sent"),
+            send_csv=not exp.get("csv_sent"),
+            session=session,
+            cancel_event=cancel_event,
+        )
+        exp["attempts"] = int(exp.get("attempts", 0) or 0) + 1
+        exp["last_attempt_at"] = _now_stamp()
+        # Ghi nhớ file nào đã gửi (để retry không gửi trùng).
+        if res.pdf_ok:
+            exp["pdf_sent"] = True
+        if res.csv_ok:
+            exp["csv_sent"] = True
+
+        if res.cancelled:
+            exp["last_error"] = "Đã hủy giữa chừng"
+            self._write_meta_quiet(pending_folder, exp)
+            return _upload_record(exp, False, "Đã hủy", cancelled=True)
+
+        if not res.ok:
+            # Lưu cờ đã-gửi từng phần + lý do lỗi rồi ĐI TIẾP cặp sau: một cặp
+            # hỏng không được chặn cả lô.
+            exp["last_error"] = res.message
+            self._write_meta_quiet(pending_folder, exp)
+            return _upload_record(exp, False, res.message)
+
+        exp["last_error"] = ""
+        exp["uploaded_at"] = exp["last_attempt_at"]
+        try:
+            export_store.move_pair(exp, uploaded_folder)
+        except OSError as e:
+            # Server đã nhận nhưng file kẹt ở pending. Cờ *_sent giữ nguyên nên
+            # lần sau chỉ chuyển thư mục, không gửi trùng lên server.
+            exp["last_error"] = (
+                f"Đã gửi lên server nhưng không di chuyển được file: {e}"
+            )
+            self._write_meta_quiet(pending_folder, exp)
+            return _upload_record(exp, False, exp["last_error"])
+        return _upload_record(exp, True, "OK")
+
+    def _cancel_upload(self) -> None:
+        """Yêu cầu thread nền dừng sau cặp hiện tại (không giết giữa chừng)."""
+
+        if self._cancel_event is None or self._cancel_event.is_set():
+            return
+        self._cancel_event.set()
+        self.cancel_btn.set_state("disabled")
+        self.status.set("Đang hủy — chờ cặp hiện tại kết thúc...", "warning")
+
+    def _write_meta_quiet(self, folder: str, exp: dict) -> None:
+        """Ghi meta, nuốt lỗi I/O — mất meta không được làm hỏng cả lô upload."""
+
+        try:
+            export_store.write_meta(folder, exp)
+        except OSError as e:
+            log.warning("Không ghi được meta cho %s: %s", exp.get("display_name"), e)
 
     def _upload_progress(self, idx: int, total: int, name: str) -> None:
         self.status.set(f"Đang upload [{idx + 1}/{total}]: {name}...", "working")
         self._progress_set(idx)
 
-    def _finalize_upload(self, moved_ids: list, fail_msg: str, total: int) -> None:
-        """Chuyển các cặp đã upload xong từ Pending sang Uploaded (main thread)."""
+    def _finalize_upload(
+        self,
+        results: list[dict],
+        total_planned: int,
+        demo: bool = False,
+        error: str = "",
+    ) -> None:
+        """Chuyển các cặp đã upload xong từ Pending sang Uploaded (main thread).
 
-        self._progress_set(total)
-        moved_set = set(moved_ids)
+        Cặp lỗi được GIỮ NGUYÊN trong Pending và vẫn còn tick ☑, nên lần sau chỉ
+        cần bấm Upload là thử lại đúng những cặp chưa lên. `total_planned` là số
+        cặp đã chọn ban đầu — chênh lệch với `len(results)` là số cặp chưa kịp
+        thử (do hủy hoặc lỗi ngoài vòng lặp).
+        """
+
+        self._cancel_event = None
+        self.cancel_btn.pack_forget()
+        self._progress_set(total_planned)
+        moved_set = {r["id"] for r in results if r["ok"]}
 
         remaining = []
         for exp in self.saved_exports:
@@ -1795,23 +1994,83 @@ class UploadPDFPage(tk.Frame):
         self._refresh_file_list()
 
         n_ok = len(moved_set)
-        if fail_msg:
-            self.status.set(
-                f"Upload: {n_ok} OK, đã dừng do lỗi. "
-                f"Còn {len(self.saved_exports)} cặp Pending.",
-                "error",
-            )
-            show_error(
-                self,
-                "Upload có lỗi",
-                f"Đã upload {n_ok}/{total} cặp file.\n\n"
-                f"Lỗi: {fail_msg}\n\n"
-                "Các cặp còn lại vẫn nằm trong Pending (có thể bấm Upload để thử lại).",
-            )
+        n_fail = len(results) - n_ok
+        n_skipped = max(0, total_planned - len(results))
+        prefix = "Demo: " if demo else ""
+
+        if error:
+            self.status.set(f"{prefix}Lỗi upload: {error}", "error")
+        elif n_fail or n_skipped:
+            parts = [f"{prefix}Upload {n_ok}/{total_planned} cặp."]
+            if n_fail:
+                parts.append(f"{n_fail} cặp lỗi.")
+            if n_skipped:
+                parts.append(f"{n_skipped} cặp chưa thử.")
+            parts.append(f"Còn {len(self.saved_exports)} cặp trong Pending.")
+            self.status.set(" ".join(parts), "error" if not n_ok else "warning")
         else:
             self.status.set(
-                f"Upload thành công! {n_ok}/{total} cặp file.", "success"
+                f"{prefix}Upload thành công! {n_ok}/{total_planned} cặp file.",
+                "success",
             )
+
+        # Toàn bộ thành công thì status bar là đủ — không chặn người dùng bằng
+        # một modal chỉ để báo tin tốt.
+        if n_fail or n_skipped or error:
+            self._show_upload_report(
+                results, total_planned, demo=demo, error=error
+            )
+
+    def _show_upload_report(
+        self,
+        results: list[dict],
+        total_planned: int,
+        demo: bool = False,
+        error: str = "",
+    ) -> None:
+        """Báo cáo cuối lô: cặp nào đã lên, cặp nào chưa và vì sao."""
+
+        ok_lines = [f"✔  {r['name']}" for r in results if r["ok"]]
+
+        fail_lines: list[str] = []
+        for r in results:
+            if not r["ok"]:
+                fail_lines.append(f"✘  {r['name']}")
+                fail_lines.append(f"↳ {r['message']}")
+
+        n_ok = len(ok_lines)
+        n_fail = len(results) - n_ok
+        n_skipped = max(0, total_planned - len(results))
+
+        groups = [
+            (f"ĐÃ UPLOAD ({n_ok})", ACCENT_GREEN, ok_lines),
+            (
+                f"CHƯA UPLOAD ({n_fail}) — vẫn nằm trong Pending, "
+                "đã tick sẵn để bấm Upload thử lại",
+                ACCENT_RED,
+                fail_lines,
+            ),
+        ]
+        if n_skipped:
+            groups.append(
+                (
+                    f"CHƯA THỬ ({n_skipped}) — lô dừng trước khi tới các cặp này",
+                    ACCENT_ORANGE,
+                    ["Vẫn nằm trong Pending, bấm Upload để gửi tiếp."],
+                )
+            )
+        if error:
+            groups.append(("LỖI LÔ UPLOAD", ACCENT_RED, [error]))
+
+        kind = "error" if (n_ok == 0 or error) else "warning"
+        title = "Kết quả Upload (Demo)" if demo else "Kết quả Upload"
+        show_report(
+            self,
+            title,
+            f"{n_ok}/{total_planned} cặp thành công",
+            groups,
+            kind=kind,
+        )
 
     # ================================================================
     # BACKGROUND / BUSY HELPERS
@@ -1846,11 +2105,14 @@ class UploadPDFPage(tk.Frame):
                 result, err = None, e
             self._post(lambda: done(result, err))
 
-        threading.Thread(target=runner, daemon=True).start()
+        self._worker = threading.Thread(target=runner, daemon=True)
+        self._worker.start()
 
     def _set_busy(self, busy: bool, message: str | None = None) -> None:
         self._busy = busy
         if busy:
+            # cancel_btn cố ý KHÔNG bị disable — nó là lối thoát duy nhất khi
+            # lô upload gặp server chết.
             self.save_btn.set_state("disabled")
             self.upload_btn.set_state("disabled")
             try:
@@ -1922,14 +2184,31 @@ class UploadPDFPage(tk.Frame):
         self._refresh_file_list()
 
         if announce and (pending or uploaded):
+            # Nhắc riêng số cặp từng lỗi để user biết cần bấm Upload lại.
+            n_failed = sum(1 for e in pending if e.get("last_error"))
+            note = f" (⚠ {n_failed} cặp lần trước upload lỗi)" if n_failed else ""
             self.status.set(
                 f"Đã nạp {len(pending)} cặp chờ upload, "
-                f"{len(uploaded)} cặp đã upload từ thư mục làm việc.",
-                "info",
+                f"{len(uploaded)} cặp đã upload từ thư mục làm việc.{note}",
+                "info" if not n_failed else "warning",
             )
 
     def on_close(self) -> None:
         """Dọn tài nguyên khi đóng app (được App gọi qua WM_DELETE_WINDOW)."""
+
+        # Dừng lô upload rồi CHỜ thread kết thúc. Thread daemon bị giết giữa lúc
+        # move_pair có thể để một cặp kẹt nửa pending nửa uploaded, và cặp đó sẽ
+        # biến mất khỏi cả hai tab ở lần mở sau.
+        if self._cancel_event is not None:
+            self._cancel_event.set()
+        worker = self._worker
+        if worker is not None and worker.is_alive():
+            worker.join(timeout=SHUTDOWN_JOIN_TIMEOUT)
+            if worker.is_alive():
+                log.warning(
+                    "Thread upload chưa dừng sau %.0fs — thoát mà không chờ thêm.",
+                    SHUTDOWN_JOIN_TIMEOUT,
+                )
 
         if self.current_pdf:
             try:
