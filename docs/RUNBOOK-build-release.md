@@ -12,7 +12,7 @@ Quy trình đóng gói `dist\VitalLens\` thành bản phát hành cho máy ngư�
 | Yêu cầu | Ghi chú |
 | --- | --- |
 | Windows | Nền tảng build duy nhất được hỗ trợ |
-| Conda env `paddleocr` | `conda activate paddleocr` trước khi chạy build |
+| Conda env `vitallens` | `conda activate vitallens` trước khi chạy build |
 | PaddleX models đã tải | Nằm ở `%USERPROFILE%\.paddlex\official_models` |
 | `.env.example` có ở repo root | `build.bat` sẽ dừng nếu thiếu file này |
 
@@ -20,7 +20,7 @@ Tải model trước nếu máy build còn trắng — chạy app một lần r�
 hoặc để `paddlex` tự tải:
 
 ```powershell
-conda activate paddleocr
+conda activate vitallens
 python main.py
 ```
 
@@ -29,7 +29,7 @@ python main.py
 ## 2. Build
 
 ```powershell
-conda activate paddleocr
+conda activate vitallens
 build.bat
 ```
 
@@ -46,7 +46,7 @@ file được liệt kê rồi build lại.
 ### Build thủ công (khi cần debug)
 
 ```powershell
-conda activate paddleocr
+conda activate vitallens
 python -m PyInstaller build_exe.spec --noconfirm --clean
 copy .env.example dist\VitalLens\.env.example
 ```
@@ -126,7 +126,7 @@ trong thư mục app, nên rollback không làm mất cặp PDF+CSV nào.
 
 | Triệu chứng | Nguyên nhân | Cách xử lý |
 | --- | --- | --- |
-| `build.bat` báo `[ERROR] Could not find Python` | Chưa activate conda env | `conda activate paddleocr` |
+| `build.bat` báo `[ERROR] Could not find Python` | Chưa activate conda env | `conda activate vitallens` |
 | `[LEAK] dist\VitalLens\.env exists` | Còn sót từ bản build cũ | `Remove-Item dist\VitalLens\.env` rồi build lại |
 | `[ERROR] .env.example not found` | Thiếu template ở repo root | Khôi phục `.env.example` từ git |
 | EXE khởi động rồi tắt ngay | Thiếu PaddleX models | Chạy app từ source một lần để tải models, build lại |

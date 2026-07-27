@@ -16,7 +16,8 @@ VitalLens is a Python/Tkinter desktop app for medical data processing. The proje
 ```text
 VitalLens/
 ├── main.py                  # Entry point (sets Paddle env flags before UI)
-├── requirements.txt
+├── requirements.txt         # Runtime deps (pinned)
+├── requirements-build.txt   # Runtime + PyInstaller (build machines only)
 ├── build_exe.spec           # PyInstaller spec (onedir)
 ├── build.bat                # One-click build script
 ├── .env.example             # Template for secrets (the ONLY config file that ships)
@@ -121,17 +122,24 @@ and a report at the end lists what went up and what did not, with reasons.
 ## Requirements
 
 - **OS**: Windows (primary target for running and building)
-- **Python**: 3.10+ (tested with 3.12)
-- **Conda environment**: `paddleocr` (recommended for PaddlePaddle dependencies)
+- **Python**: 3.12 (pins in `requirements.txt` are verified on 3.12.13)
+- **Environment**: conda or venv — both work. Everything installs via pip, so neither is smaller than the other.
+
+Dependencies are split so a runtime machine never pulls the build toolchain:
+
+| File | Contents | Install when |
+| --- | --- | --- |
+| `requirements.txt` | Runtime deps, pinned with `==` | Running from source |
+| `requirements-build.txt` | The above **plus** PyInstaller | Building the EXE |
 
 ## Setup
 
 ### Using Conda (recommended)
 
 ```powershell
-conda create -n paddleocr python=3.12 -y
-conda activate paddleocr
-pip install -r requirements.txt
+conda create -n vitallens python=3.12 -y
+conda activate vitallens
+pip install -r requirements-build.txt      # or requirements.txt to just run
 ```
 
 ### Using venv
@@ -139,13 +147,41 @@ pip install -r requirements.txt
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements-build.txt
+```
+
+### Why the pins
+
+Versions are pinned so two builds made months apart produce the same bundle.
+Only directly-used packages are pinned; pip resolves the rest.
+
+Two entries are worth knowing about:
+
+- **`opencv-python-headless`** — no package declares OpenCV as a dependency, but `paddlex` imports `cv2` in 47 files, so it must be pinned explicitly. The `headless` variant is used because this is a Tkinter app that never opens an OpenCV window (the previously-installed `opencv-contrib-python` cost ~121 MB versus roughly a third of that).
+- **`gdcm` was removed** — the PyPI package by that name is not the official GDCM binding and fails to import (`DLL load failed while importing _gdcmswig`), so `pydicom` reported it unavailable the whole time. For full codec coverage in one package, use `python-gdcm` instead.
+
+### DICOM compression support
+
+`pydicom` cannot decode compressed pixel data on its own. The pinned set covers
+**JPEG baseline/lossless** via `pylibjpeg-libjpeg`. JPEG2000 and RLE have **no
+decoder** in the current set — `ds.pixel_array` will raise on such files. If your
+X-rays use them, uncomment these in `requirements.txt`:
+
+```text
+pylibjpeg-openjpeg==2.5.0    # JPEG2000 — common for CR/DX
+pylibjpeg-rle==2.2.0         # RLE Lossless
+```
+
+Check what your data actually uses before deciding:
+
+```powershell
+python -c "import pydicom,sys; print(pydicom.dcmread(sys.argv[1]).file_meta.TransferSyntaxUID)" path\to\file.dcm
 ```
 
 ## Run Locally
 
 ```powershell
-conda activate paddleocr
+conda activate vitallens
 python main.py
 ```
 
@@ -218,7 +254,7 @@ incident checklist — are in **[docs/RUNBOOK-secrets.md](docs/RUNBOOK-secrets.m
 ### Prerequisites
 
 ```powershell
-conda activate paddleocr
+conda activate vitallens
 ```
 
 Ensure PaddleOCR models are downloaded before building (run the app once, or let `paddlex` download them automatically to `%USERPROFILE%\.paddlex\official_models`).
@@ -226,12 +262,12 @@ Ensure PaddleOCR models are downloaded before building (run the app once, or let
 ### Quick Build
 
 ```powershell
-conda activate paddleocr
+conda activate vitallens
 build.bat
 ```
 
 The script automatically:
-1. Detects the active Conda `paddleocr` environment
+1. Detects the active Conda `vitallens` environment
 2. Runs PyInstaller with `build_exe.spec`
 3. Copies **`.env.example`** (the template — never the real `.env`) next to the EXE
 4. Copies `icon.ico` to the dist folder
@@ -240,7 +276,7 @@ The script automatically:
 ### Manual Build
 
 ```powershell
-conda activate paddleocr
+conda activate vitallens
 python -m PyInstaller build_exe.spec --noconfirm --clean
 copy .env.example dist\VitalLens\.env.example
 ```

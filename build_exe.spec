@@ -3,7 +3,7 @@
 PyInstaller spec - VitalLens (onedir mode).
 
 Build command:
-  conda activate paddleocr
+  conda activate vitallens
   pyinstaller build_exe.spec --noconfirm --clean
 
 Or use the wrapper script:

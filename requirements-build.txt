@@ -1,0 +1,14 @@
+# =====================================================================
+# VitalLens - build toolchain
+#
+# Chỉ cần trên máy build EXE. Tách khỏi requirements.txt để môi trường
+# chạy app không kéo theo PyInstaller.
+#
+#   pip install -r requirements-build.txt
+# (dòng dưới tự kéo luôn toàn bộ runtime deps)
+# =====================================================================
+
+-r requirements.txt
+
+pyinstaller==6.21.0
+pyinstaller-hooks-contrib==2026.6

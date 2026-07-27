@@ -1,28 +1,57 @@
-# === PaddlePaddle / OCR ===
-paddleocr
-paddlex
-paddlepaddle
+# =====================================================================
+# VitalLens - runtime dependencies
+#
+# Pin cứng (==) để hai máy build ở hai thời điểm ra cùng một bundle.
+# Chỉ pin package DÙNG TRỰC TIẾP; pip tự giải phần phụ thuộc gián tiếp.
+#
+# Đã kiểm chứng trên Python 3.12.13 / Windows.
+# Công cụ build (PyInstaller) nằm riêng: requirements-build.txt
+# =====================================================================
 
-# === Image / DICOM ===
-pydicom
-pylibjpeg
-pylibjpeg-libjpeg
-gdcm
-numpy
-Pillow
+# --- PaddlePaddle / OCR (nặng nhất: ~380 MB cho paddlepaddle) ---
+paddlepaddle==3.3.1
+paddleocr==3.7.0
+paddlex==3.7.2
 
-# === PDF ===
-pypdfium2
+# OpenCV: KHÔNG package nào khai báo nó là dependency, nhưng paddlex
+# `import cv2` ở 47 file → bắt buộc phải có, và phải tự pin.
+# Dùng bản `headless`: app Tkinter không dùng cửa sổ GUI của OpenCV, còn
+# bản `contrib` chứa các module nghiên cứu mà pipeline OCR không đụng tới.
+# (thay cho opencv-contrib-python 4.10.0.84 ~121 MB)
+opencv-python-headless==4.10.0.84
 
-# === Excel ===
-openpyxl
+# --- Image / DICOM ---
+pydicom==3.0.2
+numpy==2.3.5
+Pillow==12.3.0
 
-# === SFTP ===
-paramiko
+# Giải nén DICOM: pydicom không tự giải ảnh nén, phải có plugin.
+#   pylibjpeg-libjpeg -> JPEG baseline / lossless
+# LƯU Ý: chưa có plugin cho JPEG2000 và RLE. Nếu ảnh X-quang của bạn dùng
+# hai định dạng đó thì `ds.pixel_array` (xray.py:214) sẽ ném lỗi — bỏ
+# comment dòng tương ứng bên dưới.
+pylibjpeg==2.1.0
+pylibjpeg-libjpeg==2.4.0
+# pylibjpeg-openjpeg==2.5.0    # JPEG2000 — hay gặp ở ảnh CR/DX
+# pylibjpeg-rle==2.2.0         # RLE Lossless
 
-# === Config / Upload ===
-python-dotenv
-requests
+# ĐÃ GỠ: `gdcm==1.1`
+#   Đó KHÔNG phải thư viện GDCM chính thức (Summary/Home-page = UNKNOWN,
+#   author "xuhui") và nó KHÔNG import được:
+#     ImportError: DLL load failed while importing _gdcmswig
+#   pydicom báo gdcm_handler.is_available() = False → suốt thời gian qua
+#   nó chỉ chiếm 7.9 MB mà không giải nén được gì.
+#   Nếu muốn đủ codec trong MỘT package, dùng bản chính thức: python-gdcm
 
-# === Build ===
-pyinstaller
+# --- PDF ---
+pypdfium2==5.11.0
+
+# --- Excel ---
+openpyxl==3.1.5
+
+# --- SFTP ---
+paramiko==5.0.0
+
+# --- Config / Upload ---
+python-dotenv==1.2.2
+requests==2.34.2

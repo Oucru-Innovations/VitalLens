@@ -4,12 +4,12 @@ cd /d "%~dp0"
 
 :: ====================================================================
 :: VitalLens - Build Script
-:: Usage: conda activate paddleocr && build.bat
+:: Usage: conda activate vitallens && build.bat
 :: ====================================================================
 
 set "PYTHON_EXE="
 
-:: Priority 1: Conda env (paddleocr)
+:: Priority 1: Conda env (vitallens)
 if defined CONDA_PREFIX if exist "%CONDA_PREFIX%\python.exe" (
     set "PYTHON_EXE=%CONDA_PREFIX%\python.exe"
     echo [INFO] Using Conda env: %CONDA_PREFIX%
@@ -27,7 +27,7 @@ if not defined PYTHON_EXE where python >nul 2>nul && set "PYTHON_EXE=python"
 
 if not defined PYTHON_EXE (
     echo [ERROR] Could not find Python.
-    echo [ERROR] Run: conda activate paddleocr
+    echo [ERROR] Run: conda activate vitallens
     exit /b 1
 )
 
