@@ -11,6 +11,25 @@ def sanitize_sheet_name(name: str, default: str = "Sheet1") -> str:
     return cleaned[:31]
 
 
+def append_row_as_text(ws, values: Iterable) -> None:
+    """Ghi 1 dòng, ép các ô bị hiểu nhầm là công thức về dạng text.
+
+    openpyxl gán ``data_type="f"`` cho mọi chuỗi bắt đầu bằng ``=`` (và chỉ
+    ``=``; ``+ - @`` đã được lưu dạng text sẵn trong .xlsx). Hệ quả: kết quả
+    xét nghiệm dạng ``=<0.5`` mở ra thành ``#NAME?`` — mất dữ liệu âm thầm —
+    còn chuỗi kiểu ``=cmd|'/c calc'!A1`` trở thành lệnh DDE.
+
+    Hạ ``f`` → ``s`` sau khi ghi giữ nguyên **đúng văn bản gốc**. Không dùng
+    cách prefix dấu ``'`` như bên CSV: ở .xlsx nó sẽ làm hỏng các giá trị âm
+    hợp lệ (``-5.2``) vốn không hề bị coi là công thức.
+    """
+
+    ws.append(list(values))
+    for cell in ws[ws.max_row]:
+        if cell.data_type == "f" and isinstance(cell.value, str):
+            cell.data_type = "s"
+
+
 def collect_columns(rows: Iterable[dict]) -> List[str]:
     columns: List[str] = []
     seen = set()
@@ -37,9 +56,9 @@ def write_rows_to_xlsx(
     ws.title = sanitize_sheet_name(sheet_name)
 
     cols = columns or collect_columns(rows)
-    ws.append(cols)
+    append_row_as_text(ws, cols)
     for row in rows:
-        ws.append([row.get(column, "") for column in cols])
+        append_row_as_text(ws, [row.get(column, "") for column in cols])
 
     wb.save(path)
     return len(rows)

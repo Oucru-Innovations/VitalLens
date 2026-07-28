@@ -63,6 +63,11 @@ for _lib_pkg in ('paddle', 'pypdfium2'):
 # =====================================================================
 import pathlib as _pl
 
+# PyInstaller không chdir tới thư mục spec, nên đường dẫn tương đối sẽ hỏng khi
+# chạy `pyinstaller VitalLens/build_exe.spec` từ thư mục khác. SPECPATH do
+# PyInstaller bơm vào namespace của spec chính là để dùng cho việc này.
+_SPEC_DIR = _pl.Path(globals().get('SPECPATH', '.')).resolve()
+
 _models_root = _pl.Path.home() / '.paddlex' / 'official_models'
 _MODEL_NAMES = ['PP-OCRv5_mobile_det', 'en_PP-OCRv5_mobile_rec']
 _MODEL_EXTENSIONS = {'.json', '.pdiparams', '.pdmodel', '.yml', '.yaml'}
@@ -75,9 +80,53 @@ for _m in _MODEL_NAMES:
                 _all_datas.append((str(_f), f'paddlex_models/{_m}'))
 
 # Bundle icon
-_icon_file = _pl.Path('icon.ico')
+_icon_file = _SPEC_DIR / 'icon.ico'
 if _icon_file.is_file():
     _all_datas.append((str(_icon_file), '.'))
+
+# =====================================================================
+# Bundle danh mục dịch vụ y tế (XML4 lookup + filter)
+#
+# Chỉ nằm TRONG bundle (_internal\database\), không copy ra cạnh EXE: bản
+# phát hành không có file danh mục nào cho người dùng sửa.
+#
+# Đồng thời đối chiếu SHA-256 với hằng số CATALOG_SHA256 trong
+# apps/services/medical_catalog.py. Đọc hằng số bằng ast thay vì import
+# apps.* — import sẽ kéo theo tkinter/config và nạp .env lúc build.
+# =====================================================================
+import ast as _ast
+import hashlib as _hashlib
+
+_catalog_file = _SPEC_DIR / 'database' / 'database_medical.csv'
+if not _catalog_file.is_file():
+    raise SystemExit(
+        f'[ERROR] Missing {_catalog_file} - XML4 export cannot filter without it.'
+    )
+
+_mc_source = _SPEC_DIR / 'apps' / 'services' / 'medical_catalog.py'
+_expected_sha = None
+for _node in _ast.parse(_mc_source.read_text(encoding='utf-8')).body:
+    if isinstance(_node, _ast.Assign) and any(
+        getattr(_t, 'id', '') == 'CATALOG_SHA256' for _t in _node.targets
+    ):
+        _expected_sha = _ast.literal_eval(_node.value)
+
+if not _expected_sha:
+    raise SystemExit(f'[ERROR] CATALOG_SHA256 not found in {_mc_source}')
+
+_actual_sha = _hashlib.sha256(_catalog_file.read_bytes()).hexdigest()
+if _actual_sha != _expected_sha:
+    raise SystemExit(
+        f'[ERROR] Catalogue fingerprint mismatch - refusing to build.\n'
+        f'        file    : {_catalog_file}\n'
+        f'        actual  : {_actual_sha}\n'
+        f'        expected: {_expected_sha}\n'
+        f'        If the catalogue was updated on purpose, set CATALOG_SHA256\n'
+        f'        in {_mc_source} to the actual value and commit both together.'
+    )
+
+print(f'[OK] Catalogue fingerprint verified: {_actual_sha[:12]}...')
+_all_datas.append((str(_catalog_file), 'database'))
 
 # =====================================================================
 # Hidden imports (lazy / dynamic imports not auto-detected)

@@ -6,7 +6,7 @@ VitalLens is a Python/Tkinter desktop app for medical data processing. The proje
 
 | Module | Purpose |
 | --- | --- |
-| XML → Excel | Decode Base64 payloads from BHYT XML files (`XML3`/`XML4` only, no column filtering) and export one Excel sheet per type |
+| XML → Excel | Decode Base64 payloads from BHYT XML files (`XML4` only), look up `MA_DICH_VU` in the medical service catalogue, and export the `Include` group plus an unclassified sheet |
 | X-Ray Anonymization | Detect burned-in text with PaddleOCR and anonymize DICOM metadata |
 | OCR Review | Review OCR output from LAB / bedside monitor folders, correct JSON, and export Excel |
 | Lab PDF Upload | View PDFs, redact sensitive regions, fill metadata, save PDF + CSV, and optionally upload via API |
@@ -23,6 +23,8 @@ VitalLens/
 ├── .env.example             # Template for secrets (the ONLY config file that ships)
 ├── icon.ico
 ├── README.md
+├── database/
+│   └── database_medical.csv # Service catalogue (SHA-256 pinned in medical_catalog.py)
 ├── docs/
 │   ├── RUNBOOK-build-release.md   # Build, verify, package, roll back
 │   └── RUNBOOK-secrets.md         # Issue / rotate / revoke tokens
@@ -53,6 +55,7 @@ VitalLens/
     │   ├── payload_io.py    # JSON / CSV via storage
     │   ├── excel_export.py  # list[dict] → .xlsx
     │   ├── lab_records.py   # Scan PROCESSING directory
+    │   ├── medical_catalog.py  # Catalogue lookup + integrity check
     │   ├── pdf_redact.py    # Render PDF + redact regions
     │   ├── export_store.py  # Durable pending/uploaded state (meta.json)
     │   └── upload_api.py    # HTTP POST (PDF + CSV pair) + retry
@@ -110,13 +113,89 @@ Fields that drive retry behavior:
 A batch **does not stop at the first failure** — every ticked pair is attempted,
 and a report at the end lists what went up and what did not, with reasons.
 
+### XML4 → Excel — catalogue lookup & filter
+
+Only `LOAIHOSO` = **XML4** is decoded; every other record type is skipped.
+Each decoded row is matched against the service catalogue on
+`MA_DICH_VU` = `ID_SERVICE`, which decides both the added `Name_Method`
+column and where the row lands:
+
+```text
+  XML4 record ──► MA_DICH_VU ──► database_medical.csv (ID_SERVICE)
+                                          │
+              ┌───────────────────────────┼───────────────────────────┐
+         Group=Include                Group=Exclude              no match
+              │                            │                          │
+              ▼                            ▼                          ▼
+   sheet "XML4_Include"                 dropped            sheet "XML4_ChuaPhanLoai"
+   + Name_Method filled              (counted only)        + Name_Method blank
+```
+
+- `Name_Method` is inserted immediately after `MA_DICH_VU` so the code and its
+  name read together.
+- Matching ignores surrounding whitespace and letter case — a few catalogue
+  codes carry a lowercase letter (`27.205b.0463`).
+- Rows with a **missing or empty** `MA_DICH_VU` go to the unclassified sheet, not
+  the bin: without a code there is no evidence the row is `Exclude`.
+- A `Group` value that is neither `Include` nor `Exclude` (typo in the CSV) also
+  lands in the unclassified sheet and is logged.
+- If no usable catalogue can be loaded, the run **fails with an error instead of
+  exporting an unfiltered file**. The message names the location and the reason.
+
+#### The catalogue is release data, not user config
+
+The filter decides which services appear in an export, so it must produce the
+same result on every machine and any deviation must be visible. It is locked
+down in three ways:
+
+| Control | Effect |
+| --- | --- |
+| **Bundle-only path** | A packaged build reads *only* `sys._MEIPASS/database/` (inside `_internal\`). No CSV ships next to `VitalLens.exe`, and a file dropped there is never read. Running from source reads the repo copy. |
+| **SHA-256 fingerprint** | `CATALOG_SHA256` in [`medical_catalog.py`](apps/services/medical_catalog.py) is checked on every load, *before* parsing. A modified catalogue stops the XML4 feature with an error — it never silently filters by different rules. |
+| **Build-time gate** | `build_exe.spec` recomputes the hash and **refuses to build** on mismatch, so a release can never pair an EXE with a catalogue it does not expect. |
+
+The fingerprint lives in source, so it is under version control: changing the
+catalogue requires editing the CSV *and* the constant in the same commit, going
+through review, and rebuilding. The loaded fingerprint is logged, so a support
+question ("which catalogue did that export use?") has an answer.
+
+**Updating the catalogue** now requires a release — this is the cost of the
+lockdown, and it is deliberate:
+
+```powershell
+# 1. replace database\database_medical.csv
+# 2. get the new fingerprint
+python -c "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('database/database_medical.csv').read_bytes()).hexdigest())"
+# 3. paste it into CATALOG_SHA256 in apps\services\medical_catalog.py
+# 4. commit both files together, then build.bat
+```
+
+> **What this does and does not stop.** It stops accidental edits, well-meaning
+> "I'll just fix one row" changes, corruption, and a swapped-in file — the
+> realistic risks for a clinical desktop tool. It does **not** stop a user with
+> local admin, who can unpack the bundle and patch the constant out of the
+> bytecode. Any check that ships with the app can be removed from the app. If
+> the catalogue must be tamper-proof in a hostile sense, the filtering has to
+> happen server-side, behind the API the app already talks to.
+
+Re-saving the CSV from Excel must use **CSV UTF-8** — the file is full of
+Vietnamese text and the default `CSV (Comma delimited)` writes cp1258, which
+changes the bytes and therefore the fingerprint.
+
+> **Caveat — `MA_BS_DOC_KQ` is not scrubbed at decode time.**
+> `XML4_EXCLUDED_COLUMNS` is applied only in `_sheet_columns()`, i.e. when
+> choosing worksheet headers. The doctor identifier is still parsed into every
+> record dict and lives in memory for the whole run. Any new export path that
+> does not route through `_sheet_columns()` — a debug dump, a JSON writer, an
+> extra sheet — will leak it.
+
 ### Where PII is removed
 
 | Stage | What is stripped | Code |
 | --- | --- | --- |
 | Lab PDF | User-drawn regions are rasterized over in black — the underlying text is gone, not just covered | `services/pdf_redact.py` |
 | X-Ray | Burned-in text detected via PaddleOCR and painted out; DICOM metadata anonymized | `processing/xray.py` |
-| XML → Excel | Non-whitelisted columns dropped during decode | `processing/xml_to_excel.py` |
+| XML → Excel | `MA_BS_DOC_KQ` omitted when picking sheet columns (it *is* decoded and held in memory — see caveat below); only `Include` services reach the main sheet | `processing/xml_to_excel.py` |
 | CSV export | Cells starting with `= + - @` are prefixed with `'` to block formula injection in Excel/Sheets | `pages/upload/page.py` |
 
 ## Requirements
@@ -270,8 +349,12 @@ The script automatically:
 1. Detects the active Conda `vitallens` environment
 2. Runs PyInstaller with `build_exe.spec`
 3. Copies **`.env.example`** (the template — never the real `.env`) next to the EXE
-4. Copies `icon.ico` to the dist folder
+4. Copies `icon.ico`, and removes any stale `dist\VitalLens\database\` left by an
+   older build — the catalogue ships inside `_internal\` only
 5. Scans the dist folder for secrets and **fails the build** if any are found
+
+The PyInstaller step also verifies the catalogue fingerprint and aborts on
+mismatch, so this happens before anything else runs.
 
 ### Manual Build
 
@@ -292,8 +375,13 @@ dist\VitalLens\
 ├── .env.example       ← template; the user renames it to .env and fills it in
 ├── icon.ico
 ├── _internal\...      ← PyInstaller runtime + bundled packages
+│   └── database\database_medical.csv   ← the only catalogue copy; fingerprint-checked
 └── ...
 ```
+
+There is deliberately **no `database\`** folder next to the EXE. If you see one,
+it is a leftover from an older build — the app ignores it, and its presence only
+misleads users into thinking the catalogue is theirs to edit.
 
 There is deliberately **no `.env`** here. If you see one, the folder is not
 shippable — see the runbook.

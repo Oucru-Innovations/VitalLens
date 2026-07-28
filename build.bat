@@ -38,7 +38,7 @@ echo ============================================================
 echo.
 
 :: --- Step 1: Build with PyInstaller ---
-echo [1/3] Running PyInstaller...
+echo [1/4] Running PyInstaller...
 if /i "%PYTHON_EXE%"=="py" (
     %PYTHON_EXE% -m PyInstaller build_exe.spec --noconfirm --clean
 ) else (
@@ -72,6 +72,15 @@ echo [3/4] Copying assets...
 if exist "icon.ico" (
     copy /Y "icon.ico" "%DIST_DIR%\icon.ico" >nul 2>nul
     echo [OK] Copied icon.ico
+)
+
+:: Danh mục dịch vụ (lọc XML4) KHÔNG được copy ra cạnh EXE - nó chỉ nằm trong
+:: bundle (_internal\database\) và được đối chiếu SHA-256 lúc chạy. Một bản CSV
+:: rời cạnh EXE sẽ khiến người dùng tưởng sửa được, trong khi app không đọc tới.
+:: Bản build cũ có copy ra, nên phải dọn nếu dist chưa được xoá sạch.
+if exist "%DIST_DIR%\database" (
+    rmdir /S /Q "%DIST_DIR%\database"
+    echo [OK] Removed stale %DIST_DIR%\database\ ^(catalogue ships inside _internal\^)
 )
 
 :: --- Step 4: Refuse to finish if a secret leaked into the dist folder ---
