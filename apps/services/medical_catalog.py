@@ -41,6 +41,7 @@ import hashlib
 import io
 import logging
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -92,9 +93,14 @@ class CatalogEntry:
 
 Catalog = Mapping[str, CatalogEntry]
 
-# Cache: (path, mtime, size) -> danh mục đã parse.
-_cache_key: tuple | None = None
-_cache_value: Catalog = MappingProxyType({})
+# Cache 1 ô: ((path, mtime, size), danh mục đã parse) — hoặc None khi chưa nạp.
+#
+# Gộp khoá và giá trị vào MỘT biến để việc cập nhật là một phép gán nguyên tử.
+# Tách làm hai biến thì `_cache_key, _cache_value = ...` biên dịch ra hai lệnh
+# STORE_GLOBAL, và `_collect_and_save` chạy trên thread nền nên một luồng khác
+# có thể đọc được khoá mới đi kèm giá trị cũ.
+_cache: tuple | None = None
+_cache_lock = threading.Lock()
 
 
 def catalog_search_paths() -> List[Path]:
@@ -109,16 +115,6 @@ def catalog_search_paths() -> List[Path]:
     if bundle_dir:
         return [Path(bundle_dir) / CATALOG_DIRNAME / CATALOG_FILENAME]
     return [Path(APP_DIR) / CATALOG_DIRNAME / CATALOG_FILENAME]
-
-
-def sha256_of(path: Path) -> str:
-    """Vân tay SHA-256 của một file (đọc theo khối, không nạp hết vào RAM)."""
-
-    digest = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def normalize_service_code(code) -> str:
@@ -157,13 +153,19 @@ def _read_verified_text(path: Path) -> str:
     Hash TRƯỚC khi parse: file đã bị sửa thì không được phép đi tiếp, kể cả
     khi nó vẫn là CSV hợp lệ — đó mới đúng là trường hợp nguy hiểm (kết quả
     lọc sai mà không ai biết).
+
+    Đọc file đúng MỘT lần rồi hash chính bytes đó. Hash một lần và đọc lại lần
+    nữa sẽ để lọt khe TOCTOU: file bị thay giữa hai lần đọc thì cái được parse
+    không phải cái đã được kiểm. Đằng nào cũng cần toàn bộ nội dung để parse,
+    nên đọc một lần còn rẻ hơn.
     """
 
     try:
-        digest = sha256_of(path)
+        raw = path.read_bytes()
     except OSError as e:
         raise CatalogError(f"không đọc được file ({e})") from e
 
+    digest = hashlib.sha256(raw).hexdigest()
     if digest != CATALOG_SHA256:
         raise CatalogError(
             f"vân tay SHA-256 không khớp — file đã bị sửa hoặc hỏng.\n"
@@ -174,9 +176,7 @@ def _read_verified_text(path: Path) -> str:
 
     try:
         # utf-8-sig: file danh mục có BOM.
-        return path.read_text(encoding="utf-8-sig")
-    except OSError as e:
-        raise CatalogError(f"không đọc được file ({e})") from e
+        return raw.decode("utf-8-sig")
     except UnicodeDecodeError as e:
         # Chỉ xảy ra khi CATALOG_SHA256 được cập nhật theo một file lưu sai
         # encoding (mở bằng Excel trên Windows tiếng Việt rồi Save mặc định →
@@ -237,7 +237,7 @@ def load_catalog(path: Optional[Path] = None) -> Catalog:
     liệt kê từng vị trí và lý do) nếu không nạp được ở đâu cả.
     """
 
-    global _cache_key, _cache_value
+    global _cache
 
     candidates = [Path(path)] if path is not None else catalog_search_paths()
     problems: List[str] = []
@@ -250,8 +250,10 @@ def load_catalog(path: Optional[Path] = None) -> Catalog:
             continue
 
         key = (str(candidate), stat.st_mtime, stat.st_size)
-        if key == _cache_key:
-            return _cache_value
+        with _cache_lock:
+            cached = _cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
 
         try:
             entries = _parse_catalog_file(candidate)
@@ -265,7 +267,8 @@ def load_catalog(path: Optional[Path] = None) -> Catalog:
             "Đã nạp danh mục %s: %d mã dịch vụ (sha256=%s…)",
             candidate, len(entries), CATALOG_SHA256[:12],
         )
-        _cache_key, _cache_value = key, entries
+        with _cache_lock:
+            _cache = (key, entries)
         return entries
 
     raise CatalogError(
@@ -297,7 +300,6 @@ __all__ = [
     "CatalogEntry",
     "CatalogError",
     "catalog_search_paths",
-    "sha256_of",
     "normalize_service_code",
     "load_catalog",
     "lookup",

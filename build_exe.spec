@@ -109,7 +109,10 @@ for _node in _ast.parse(_mc_source.read_text(encoding='utf-8')).body:
     if isinstance(_node, _ast.Assign) and any(
         getattr(_t, 'id', '') == 'CATALOG_SHA256' for _t in _node.targets
     ):
+        # break: lay lan gan DAU TIEN. Khong break thi neu hang so bi gan hai
+        # lan, build se am tham kiem tra theo lan gan sau.
         _expected_sha = _ast.literal_eval(_node.value)
+        break
 
 if not _expected_sha:
     raise SystemExit(f'[ERROR] CATALOG_SHA256 not found in {_mc_source}')
