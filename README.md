@@ -142,6 +142,38 @@ column and where the row lands:
 - If no usable catalogue can be loaded, the run **fails with an error instead of
   exporting an unfiltered file**. The message names the location and the reason.
 
+#### Step 2 — optional Excel file (two modes)
+
+The XML page has one file picker for an optional Excel file. Which mode runs is
+decided by the **header row**, so there is no extra switch to remember:
+
+| Header contains | Mode | What happens |
+| --- | --- | --- |
+| `STUDY_ID` **and** `HRN` | study list | adds a `STUDY_ID` column, filters by date, hides `ID` and `MA_LK` |
+| anything else | plain mapping | A1 names the XML4 field to join on; the remaining columns are appended, nothing is filtered |
+
+**Study list.** Columns `STUDY_ID`, `HRN`, plus an optional date range
+(`START_DATE` and one of `END_DATE` / `FROM_DATE` / `TO_DATE`). Order does not
+matter. `HRN` is matched to a record two ways, in this order:
+
+```text
+  HRN ──► MA_LK                      (whole value)
+      └─► last 10 chars of ID, then of ID_GOC
+```
+
+- The full match is tried first because it is the stronger evidence. If two
+  `HRN`s share the same last 10 characters, matching by `ID` is disabled for
+  those codes rather than guessing — a wrong `STUDY_ID` mixes up patients.
+- With a date range, `NGAY_KQ` is compared on **date only** (`yyyymmdd`); the
+  time part is ignored so both endpoints count as whole days. Rows with no
+  dates in the list are not filtered.
+- A date the app cannot read **fails the run** — silently ignoring it would
+  export data from outside the study window with nobody noticing. A row that
+  matches an `HRN` but has no readable `NGAY_KQ` is kept and reported.
+- Rows that get no `STUDY_ID` (no match, or outside the window) are **not
+  thrown away**: they go to sheet `XML4_KhongKhopHRN`, which keeps `ID` and
+  `MA_LK` so the list can be corrected. `ID_GOC` stays on every sheet.
+
 #### The catalogue is release data, not user config
 
 The filter decides which services appear in an export, so it must produce the
@@ -195,7 +227,7 @@ changes the bytes and therefore the fingerprint.
 | --- | --- | --- |
 | Lab PDF | User-drawn regions are rasterized over in black — the underlying text is gone, not just covered | `services/pdf_redact.py` |
 | X-Ray | Burned-in text detected via PaddleOCR and painted out; DICOM metadata anonymized | `processing/xray.py` |
-| XML → Excel | `MA_BS_DOC_KQ` omitted when picking sheet columns (it *is* decoded and held in memory — see caveat below); only `Include` services reach the main sheet | `processing/xml_to_excel.py` |
+| XML → Excel | `MA_BS_DOC_KQ` omitted when picking sheet columns (it *is* decoded and held in memory — see caveat below); only `Include` services reach the main sheet; with a study list, `ID`/`MA_LK` give way to `STUDY_ID` on the matched sheets | `processing/xml_to_excel.py` |
 | CSV export | Cells starting with `= + - @` are prefixed with `'` to block formula injection in Excel/Sheets | `pages/upload/page.py` |
 
 ## Requirements

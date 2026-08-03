@@ -13,9 +13,14 @@ và nhóm lọc:
 Bản ghi thiếu ``MA_DICH_VU`` cũng vào sheet "chưa phân loại" — không có mã thì
 không thể khẳng định là Exclude, nên không được lặng lẽ vứt đi.
 
-Ngoài danh mục cố định đó, người dùng có thể chọn thêm 1 file Excel mapping
-(``services/mapping_excel.py``) để gắn thêm cột vào bản ghi. File này là tuỳ
-chọn, do người dùng kiểm soát, và chỉ THÊM cột — không tham gia lọc.
+Ngoài danh mục cố định đó, người dùng có thể chọn thêm 1 file Excel ở BƯỚC 2.
+File này tuỳ chọn và được nhận dạng theo tiêu đề cột, chạy một trong hai chế độ:
+
+- Có đủ cột ``STUDY_ID`` + ``HRN`` → **danh sách nghiên cứu**
+  (``services/study_mapping.py``): gắn ``STUDY_ID``, lọc theo khoảng ngày, và
+  ẩn ``ID``/``MA_LK`` khỏi file xuất ra.
+- Ngược lại → **mapping tổng quát** (``services/mapping_excel.py``): ô A1 là tên
+  trường XML4 dùng để ghép, các cột còn lại được gắn thêm, không lọc gì.
 
 Payload giải mã/parse không được thì bị BỎ, không xuất nội dung thô ra Excel:
 bộ lọc PII ở đây chạy trên tên cột (``XML4_EXCLUDED_COLUMNS`` trong
@@ -30,7 +35,7 @@ import zlib
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from apps.services import mapping_excel, medical_catalog
+from apps.services import mapping_excel, medical_catalog, study_mapping
 from apps.services.excel_export import (
     append_row_as_text,
     collect_columns,
@@ -49,9 +54,23 @@ XML4_EXCLUDED_COLUMNS = {"MA_BS_DOC_KQ"}
 SERVICE_CODE_COLUMN = "MA_DICH_VU"
 NAME_METHOD_COLUMN = medical_catalog.COL_NAME
 
+# Cột dùng cho danh sách nghiên cứu (BƯỚC 2, chế độ STUDY_ID).
+STUDY_ID_COLUMN = study_mapping.COL_STUDY_ID
+LINK_CODE_COLUMN = "MA_LK"          # khớp TOÀN BỘ với HRN
+RESULT_DATE_COLUMN = "NGAY_KQ"      # yyyymmddhhmm — nguồn để lọc theo khoảng ngày
+
+# Các trường thử khớp 10 ký tự cuối với HRN, theo đúng thứ tự ưu tiên. ``ID`` là
+# tên file XML (process_xml_file ghi đè), ``ID_GOC`` là ID gốc trong hồ sơ.
+STUDY_SUFFIX_FIELDS = ("ID", "ID_GOC")
+
+# Đã có STUDY_ID thì hai định danh gốc này bị ẩn khỏi file xuất ra (yêu cầu ẩn
+# danh). ID_GOC được GIỮ LẠI có chủ đích — người dùng cần nó để đối chiếu.
+STUDY_HIDDEN_COLUMNS = frozenset({"ID", LINK_CODE_COLUMN})
+
 # Tên sheet (ASCII: sanitize_sheet_name thay dấu tiếng Việt bằng "_").
 SHEET_INCLUDE = "XML4_Include"
 SHEET_UNCLASSIFIED = "XML4_ChuaPhanLoai"
+SHEET_NO_STUDY = "XML4_KhongKhopHRN"
 
 # Hai byte đầu của một stream GZIP.
 GZIP_MAGIC = b"\x1f\x8b"
@@ -213,17 +232,23 @@ def process_xml_file(xml_filepath):
     return records_out, n_bad
 
 
-def _sheet_columns(records, extra_columns=()):
-    """Cột của 1 sheet: ID đứng đầu, Name_Method nằm ngay sau MA_DICH_VU.
+def _sheet_columns(records, extra_columns=(), lead_column="ID", hidden_columns=()):
+    """Cột của 1 sheet: ``lead_column`` đứng đầu, Name_Method ngay sau MA_DICH_VU.
 
-    ``extra_columns`` (các cột từ file mapping) luôn được đưa vào cuối, kể cả
-    khi không bản ghi nào khớp — người dùng đã chọn file mapping thì phải thấy
-    cột của nó, dù rỗng, mới biết là không khớp được gì.
+    ``extra_columns`` (các cột từ file mapping tổng quát) luôn được đưa vào
+    cuối, kể cả khi không bản ghi nào khớp — người dùng đã chọn file mapping thì
+    phải thấy cột của nó, dù rỗng, mới biết là không khớp được gì.
+
+    ``lead_column`` / ``hidden_columns`` khác nhau theo từng sheet: sheet có
+    STUDY_ID thì ẩn ID và MA_LK, còn sheet "không khớp HRN" phải giữ nguyên hai
+    cột đó — nó tồn tại để người dùng rà soát, ẩn định danh đi thì rà bằng gì.
     """
 
-    columns = ["ID"] + [
+    columns = [lead_column] + [
         k for k in collect_columns(records)
-        if k not in ("ID", NAME_METHOD_COLUMN) and k not in XML4_EXCLUDED_COLUMNS
+        if k not in (lead_column, NAME_METHOD_COLUMN)
+        and k not in XML4_EXCLUDED_COLUMNS
+        and k not in hidden_columns
         and k not in extra_columns
     ]
     if SERVICE_CODE_COLUMN in columns:
@@ -286,6 +311,96 @@ def _apply_mapping(records, mapping):
     return n_matched
 
 
+def _match_study(rec, study):
+    """Tìm dòng danh sách nghiên cứu ứng với 1 bản ghi XML4.
+
+    Thứ tự thử: ``MA_LK`` khớp TOÀN BỘ HRN trước, sau đó ``ID`` rồi ``ID_GOC``
+    khớp 10 ký tự cuối. Khớp toàn bộ chắc chắn hơn nên phải được ưu tiên; khớp
+    theo hậu tố chỉ là phương án dự phòng khi hồ sơ không có MA_LK.
+    """
+
+    row = study.lookup_full(rec.get(LINK_CODE_COLUMN))
+    if row is not None:
+        return row
+    for field in STUDY_SUFFIX_FIELDS:
+        row = study.lookup_suffix(rec.get(field))
+        if row is not None:
+            return row
+    return None
+
+
+def _new_study_stats():
+    return {"matched": 0, "no_hrn": 0, "out_of_range": 0, "missing_date": 0}
+
+
+def _split_by_study(records, study, stats):
+    """Chia bản ghi theo danh sách nghiên cứu. Trả ``(khớp, không khớp)``.
+
+    Bản ghi khớp HRN được gắn ``STUDY_ID``; bản ghi không khớp, hoặc khớp nhưng
+    ``NGAY_KQ`` nằm ngoài khoảng ngày, đều rơi vào nhóm "không khớp" — nhóm này
+    vẫn được xuất ra sheet riêng chứ không bị vứt đi, để người dùng còn rà lại
+    file danh sách của mình.
+
+    Bản ghi khớp HRN nhưng thiếu/hỏng ``NGAY_KQ`` thì được GIỮ: không có ngày
+    không phải là bằng chứng nằm ngoài khoảng nghiên cứu (cùng lối xử lý với
+    ``MA_DICH_VU`` rỗng ở ``_split_by_catalog``). Số này được đếm riêng và báo
+    lên UI để người dùng tự quyết.
+
+    Sửa trực tiếp dict trong ``records``, cùng lý do với ``_split_by_catalog``.
+    """
+
+    matched, unmatched = [], []
+    for rec in records:
+        row = _match_study(rec, study)
+        if row is None:
+            stats["no_hrn"] += 1
+            unmatched.append(rec)
+            continue
+
+        if row.has_range:
+            day = study_mapping.parse_record_date(rec.get(RESULT_DATE_COLUMN))
+            if day is None:
+                stats["missing_date"] += 1
+            elif not row.covers(day):
+                stats["out_of_range"] += 1
+                unmatched.append(rec)
+                continue
+
+        rec[STUDY_ID_COLUMN] = row.study_id
+        stats["matched"] += 1
+        matched.append(rec)
+    return matched, unmatched
+
+
+def _study_note(study, stats):
+    """Câu tóm tắt kết quả ghép danh sách nghiên cứu, hiện lên UI."""
+
+    parts = [
+        f"\nDanh sách nghiên cứu '{study.source_name}': "
+        f"{stats['matched']} bản ghi có {STUDY_ID_COLUMN}"
+    ]
+    if study.has_date_filter:
+        parts.append(
+            f", lọc {RESULT_DATE_COLUMN} theo "
+            f"{study.start_column or '(không có)'} → "
+            f"{study.end_column or '(không có)'} (trọn ngày)"
+        )
+    parts.append(".")
+    if stats["no_hrn"] or stats["out_of_range"]:
+        detail = []
+        if stats["no_hrn"]:
+            detail.append(f"{stats['no_hrn']} không khớp {study_mapping.COL_HRN}")
+        if stats["out_of_range"]:
+            detail.append(f"{stats['out_of_range']} ngoài khoảng ngày")
+        parts.append(f" {', '.join(detail)} → sheet {SHEET_NO_STUDY}.")
+    if stats["missing_date"]:
+        parts.append(
+            f" ⚠ {stats['missing_date']} bản ghi khớp HRN nhưng thiếu "
+            f"{RESULT_DATE_COLUMN} — đã giữ lại, cần rà thủ công."
+        )
+    return "".join(parts)
+
+
 def _dropped_input_warning(failed_files, n_bad_payloads):
     """Câu cảnh báo về phần dữ liệu đầu vào đã bị bỏ. Rỗng nếu không mất gì.
 
@@ -322,17 +437,29 @@ def _collect_and_save(xml_files, output_path, mapping_path=None):
 
     # Mapping cũng nạp trước khi giải mã: file mapping sai thì báo ngay, thay
     # vì bắt người dùng chờ hết mấy phút decode rồi mới đổ lỗi.
+    #
+    # Chế độ được chọn theo TIÊU ĐỀ CỘT, không theo một nút bấm riêng: file có
+    # đủ STUDY_ID + HRN là danh sách nghiên cứu, còn lại là mapping tổng quát.
+    # Người dùng chỉ có một nút "Chọn file mapping" và không phải nhớ mình đang
+    # ở chế độ nào.
+    study = None
     mapping = None
     if mapping_path:
         try:
-            mapping = mapping_excel.load_mapping(
-                mapping_path,
-                reserved_columns=(
-                    {"ID", "ID_GOC", NAME_METHOD_COLUMN} | XML4_EXCLUDED_COLUMNS
-                ),
-            )
-        except mapping_excel.MappingError as e:
-            return False, f"Lỗi file mapping — {e}"
+            study = study_mapping.load_study_mapping(mapping_path)
+        except study_mapping.StudyMappingError as e:
+            return False, f"Lỗi file danh sách nghiên cứu — {e}"
+        if study is None:
+            try:
+                mapping = mapping_excel.load_mapping(
+                    mapping_path,
+                    reserved_columns=(
+                        {"ID", "ID_GOC", STUDY_ID_COLUMN, NAME_METHOD_COLUMN}
+                        | XML4_EXCLUDED_COLUMNS
+                    ),
+                )
+            except mapping_excel.MappingError as e:
+                return False, f"Lỗi file mapping — {e}"
 
     all_records = []
     failed_files = []
@@ -379,17 +506,35 @@ def _collect_and_save(xml_files, output_path, mapping_path=None):
             f"{n_matched}/{len(included) + len(unclassified)} bản ghi khớp."
         )
 
+    # Mỗi sheet mang bộ cột riêng: (tên sheet, bản ghi, cột đứng đầu, cột bị ẩn).
+    if study is None:
+        sheets = [
+            (SHEET_INCLUDE, included, "ID", ()),
+            (SHEET_UNCLASSIFIED, unclassified, "ID", ()),
+        ]
+    else:
+        stats = _new_study_stats()
+        included, no_study_inc = _split_by_study(included, study, stats)
+        unclassified, no_study_unc = _split_by_study(unclassified, study, stats)
+        mapping_note = _study_note(study, stats)
+        sheets = [
+            (SHEET_INCLUDE, included, STUDY_ID_COLUMN, STUDY_HIDDEN_COLUMNS),
+            (SHEET_UNCLASSIFIED, unclassified, STUDY_ID_COLUMN, STUDY_HIDDEN_COLUMNS),
+            # Sheet rà soát: giữ nguyên ID/MA_LK để còn truy ngược được.
+            (SHEET_NO_STUDY, no_study_inc + no_study_unc, "ID", ()),
+        ]
+
     # write_only: openpyxl ghi thẳng từng dòng ra file thay vì dựng toàn bộ đối
     # tượng Cell trong RAM. Một lô XML4 lớn có thể lên hàng trăm nghìn dòng.
     wb = Workbook(write_only=True)
-    for title, records in (
-        (SHEET_INCLUDE, included),
-        (SHEET_UNCLASSIFIED, unclassified),
-    ):
+    for title, records, lead_column, hidden_columns in sheets:
         if not records:
             continue
         ws = wb.create_sheet(title=sanitize_sheet_name(title, default="Sheet"))
-        columns = _sheet_columns(records, mapping_columns)
+        columns = _sheet_columns(
+            records, mapping_columns,
+            lead_column=lead_column, hidden_columns=hidden_columns,
+        )
         # append_row_as_text: giá trị xét nghiệm kiểu "=<0.5" phải giữ nguyên
         # văn bản, không được biến thành công thức Excel.
         append_row_as_text(ws, columns)

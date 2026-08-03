@@ -71,6 +71,25 @@ Do not "helpfully" restore an `APP_DIR` override or soften the hash check to a w
 
 Note `XML4_EXCLUDED_COLUMNS` is applied only in `_sheet_columns()`; excluded fields are still parsed and held in memory, so a new export path that bypasses that function will emit them.
 
+### The step-2 Excel file has two modes, picked by header
+
+One optional file picker on the XML page feeds two different services. `_collect_and_save` tries `study_mapping.load_study_mapping()` first; it returns `None` — not an error — when the header lacks `STUDY_ID` + `HRN`, and only then does the generic `mapping_excel.load_mapping()` run. Neither is cached: editing the file and re-running must show the new result.
+
+| | `services/mapping_excel.py` | `services/study_mapping.py` |
+| --- | --- | --- |
+| Trigger | anything else | header has both `STUDY_ID` and `HRN` |
+| Headers | user-defined; A1 = the XML4 field to join on | fixed names, column order irrelevant |
+| Effect | appends its columns, filters nothing | adds `STUDY_ID`, filters by date, hides `ID`/`MA_LK` |
+
+Study mode specifics:
+
+- `HRN` is matched against `MA_LK` in full first, then against the **last 10 characters** of `ID` and `ID_GOC` (`STUDY_SUFFIX_FIELDS`). Full match wins because it is the stronger evidence. A value shorter than `ID_SUFFIX_LENGTH`, or two HRNs sharing the same last 10 characters, yields *no* match rather than a guess — a wrong `STUDY_ID` attaches one patient's data to another.
+- Date filtering compares **`yyyymmdd` only**, deliberately dropping the time part of `NGAY_KQ`, because both endpoints must count as full days. Start comes from `START_DATE`; end from the first of `END_DATE_HEADERS` present — `FROM_DATE` is in that list because real files name the end column that way.
+- An unparseable date in the mapping file **fails the run** (`StudyMappingError`); a record that matches an HRN but has no readable `NGAY_KQ` is **kept** and counted, same principle as a blank `MA_DICH_VU`.
+- Records with no `STUDY_ID` (no HRN match, or outside the window) go to sheet `XML4_KhongKhopHRN`, which **keeps `ID` and `MA_LK`** — the sheet exists so the user can fix their list, and hiding the identifiers there would make it useless. `ID_GOC` stays on every sheet.
+- Catalogue split runs first, so `Exclude` services never reach any sheet, including the unmatched one.
+- `_sheet_columns()` takes `lead_column` / `hidden_columns` per sheet; that is the only place `ID`/`MA_LK` are dropped, so the `XML4_EXCLUDED_COLUMNS` caveat above applies to them too.
+
 ### UI threading
 
 Long work runs on daemon threads; Tk is touched only from the main thread. Two patterns coexist: most pages use `self.controller.after(0, ...)` / `self.after(...)`, while `pages/upload/page.py` uses a `queue.Queue` drained by `_poll_ui_queue` every 80 ms with `_post()` / `_run_async(work, done)` helpers. Follow whichever the file already uses. Pages may define `on_close()` — `App._on_close` calls it on every page to release PDF handles and SFTP transports.
@@ -81,7 +100,7 @@ Long work runs on daemon threads; Tk is touched only from the main thread. Two p
 | --- | --- | --- |
 | Lab PDF | Pages rasterized via pypdfium2, regions painted black — underlying text is gone, not covered | `services/pdf_redact.py` |
 | X-Ray | PaddleOCR detects burned-in text and paints it out; DICOM tags in `DICOM_PATIENT_TAGS` anonymized | `processing/xray.py` |
-| XML → Excel | Only XML4 is decoded; `XML4_EXCLUDED_COLUMNS` omitted **at column-selection time only**, and only catalogue-`Include` services reach the main sheet | `processing/xml_to_excel.py` |
+| XML → Excel | Only XML4 is decoded; `XML4_EXCLUDED_COLUMNS` omitted **at column-selection time only**, and only catalogue-`Include` services reach the main sheet. With a study list, `ID`/`MA_LK` are replaced by `STUDY_ID` on the matched sheets (but not on `XML4_KhongKhopHRN`) | `processing/xml_to_excel.py` |
 | CSV export | Cells starting with `= + - @` get a `'` prefix (formula injection) | `pages/upload/page.py` |
 
 OCR false-positive thresholds (`OCR_DET_SCORE_THRESHOLD`, `OCR_REC_SCORE_THRESHOLD`, `OCR_MIN_TEXT_LENGTH`, `OCR_MIN_BBOX_AREA`) are constants at the top of `processing/xray.py`. Detection proposes regions, recognition validates them — only confirmed text is erased.

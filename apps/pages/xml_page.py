@@ -64,9 +64,13 @@ class XMLToExcelPage(tk.Frame):
 
         tk.Label(
             s2,
-            text=("Gắn thêm cột vào kết quả. Dòng 1 là tiêu đề; ô A1 phải là tên "
-                  "trường trong hồ sơ XML4\ndùng để ghép (ví dụ MA_DICH_VU), các "
-                  "cột còn lại sẽ được thêm vào file Excel xuất ra."),
+            text=("Dòng 1 là tiêu đề. Chế độ được chọn tự động theo tên cột:\n"
+                  "• Có cột STUDY_ID và HRN → danh sách nghiên cứu: HRN được ghép "
+                  "với MA_LK (toàn bộ) hoặc 10 ký tự cuối của ID,\n"
+                  "   kết quả xuất ra cột STUDY_ID và ẩn ID/MA_LK. Có thêm "
+                  "START_DATE/END_DATE thì lọc NGAY_KQ theo khoảng đó (trọn ngày).\n"
+                  "• Không có → mapping thường: ô A1 là tên trường XML4 dùng để "
+                  "ghép (ví dụ MA_DICH_VU), các cột còn lại được thêm vào."),
             font=("Helvetica", 10), bg=BG_CARD, fg=FG_DIM, justify="left",
         ).pack(anchor="w", padx=15, pady=(0, 8))
 
