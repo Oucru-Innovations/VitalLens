@@ -198,6 +198,10 @@ class Settings:
     # /EI_SHARE/.received/<studyID>/PROCESSING.
     sftp_path: str = "/EI_SHARE/.received/13NV/PROCESSING"
 
+    # SFTP buffer dir (destination for a separate inference util to pick up)
+    sftp_buffer_path: str = ""
+    sftp_upload_default_user: str = "user@oucru.org"
+
     # API upload
     api_upload_url: str = ""
     api_bearer_token: str = ""
@@ -231,6 +235,10 @@ class Settings:
             sftp_demo_mode=_env_bool("SFTP_DEMO_MODE", False),
             sftp_path=_env_str(
                 "SFTP_PATH", "/EI_SHARE/.received/13NV/PROCESSING"
+            ),
+            sftp_buffer_path=_env_str("SFTP_BUFFER_PATH", ""),
+            sftp_upload_default_user=_env_str(
+                "SFTP_UPLOAD_DEFAULT_USER", "user@oucru.org"
             ),
             api_upload_url=_env_str("API_UPLOAD_URL", ""),
             api_bearer_token=_env_str("API_BEARER_TOKEN", ""),
@@ -272,6 +280,8 @@ SFTP_HOST: str = SETTINGS.sftp_host
 SFTP_PORT: int = SETTINGS.sftp_port
 SFTP_DEMO_MODE: bool = SETTINGS.sftp_demo_mode
 SFTP_PATH: str = SETTINGS.sftp_path
+SFTP_BUFFER_PATH: str = SETTINGS.sftp_buffer_path
+SFTP_UPLOAD_DEFAULT_USER: str = SETTINGS.sftp_upload_default_user
 API_UPLOAD_URL: str = SETTINGS.api_upload_url
 API_BEARER_TOKEN: str = SETTINGS.api_bearer_token
 API_UPLOAD_OWNER: str = SETTINGS.api_upload_owner
@@ -305,6 +315,8 @@ __all__ = [
     "SFTP_PORT",
     "SFTP_DEMO_MODE",
     "SFTP_PATH",
+    "SFTP_BUFFER_PATH",
+    "SFTP_UPLOAD_DEFAULT_USER",
     "API_UPLOAD_URL",
     "API_BEARER_TOKEN",
     "API_UPLOAD_OWNER",

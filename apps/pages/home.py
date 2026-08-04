@@ -29,6 +29,7 @@ class HomePage(tk.Frame):
         from apps.pages.xray_page import XRayPage
         from apps.pages.ocr import OCRPage
         from apps.pages.upload import UploadPDFPage
+        from apps.pages.multi_upload_page import MultiUploadPage
 
         btn_data = [
             ("Xử lý XML → Excel", "Giải mã XML4, đối chiếu danh mục dịch vụ → Excel",
@@ -37,8 +38,10 @@ class HomePage(tk.Frame):
              ACCENT_ORANGE, BTN_HOVER_ORANGE, XRayPage),
             ("Đánh giá kết quả OCR", "So sánh kết quả OCR với dữ liệu gốc",
              ACCENT_GREEN, BTN_HOVER_GREEN, OCRPage),
-            ("Upload PDF Xét Nghiệm", "Tô đen, nhập thông tin & lưu PDF + CSV",
+            ("Upload PDF Xét nghiệm", "Tô đen, nhập thông tin & lưu PDF + CSV",
              ACCENT_PURPLE, BTN_HOVER_PURPLE, UploadPDFPage),
+            ("Upload File đã xử lý", "Gửi file đã xử lý lên VITAL-LOG",
+             ACCENT_BLUE, BTN_HOVER_BLUE, MultiUploadPage),
         ]
 
         for title, desc, color, hover, page in btn_data:

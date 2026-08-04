@@ -6,12 +6,11 @@ không được import `paramiko` hoặc `os.listdir` trực tiếp.
 
 from __future__ import annotations
 
-import io
 import os
 import stat as _stat
 import tempfile
 from pathlib import Path
-from typing import Iterable, List, Optional, Protocol, runtime_checkable
+from typing import List, Optional, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -30,6 +29,7 @@ class StorageBackend(Protocol):
     def join(self, base: str, *parts: str) -> str: ...
     def basename(self, path: str) -> str: ...
     def fetch_to_temp(self, path: str, suffix: str = "") -> str: ...
+    def mkdir(self, path: str) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +75,9 @@ class LocalBackend:
     def fetch_to_temp(self, path: str, suffix: str = "") -> str:
         # Không cần copy - trả luôn đường dẫn gốc để viewer mở trực tiếp.
         return path
+
+    def mkdir(self, path: str) -> None:
+        os.makedirs(path, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +160,21 @@ class SftpBackend:
         self.sftp.get(path, local_path)
         return local_path
 
+    def mkdir(self, path: str) -> None:
+        """Tạo trực tiếp thư mục con"""
+        is_abs = str(path).startswith("/")
+        parts = [p for p in str(path).split("/") if p]
+        current = "/" if is_abs else ""
+        for part in parts:
+            current = self.join(current, part) if current else part
+            if self.is_dir(current):
+                continue
+            try:
+                self.sftp.mkdir(current)
+            except (IOError, OSError):
+                if not self.is_dir(current):
+                    raise
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -211,6 +229,17 @@ def resolve_named_child_dir(
     return direct_path
 
 
+def ensure_remote_dir(backend: StorageBackend, path: str) -> None:
+    """Tạo thư mục đích bằng interface của backend
+    Dùng khi upload file
+    """
+
+    clean = str(path).rstrip("/\\")
+    if not clean or safe_is_dir(backend, clean):
+        return
+    backend.mkdir(clean)
+
+
 def resolve_existing_data_dir(
     backend: StorageBackend, path: str
 ) -> Optional[str]:
@@ -253,4 +282,5 @@ __all__ = [
     "get_name",
     "resolve_named_child_dir",
     "resolve_existing_data_dir",
+    "ensure_remote_dir",
 ]
