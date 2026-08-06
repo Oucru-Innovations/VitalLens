@@ -15,6 +15,7 @@ from apps.widgets import (
     ScrollableFrame, show_info, show_warning, show_error,
 )
 from apps.processing.xml_to_excel import run_xml_to_excel
+from apps.services import study_mapping
 
 
 def _flat_button(parent, text, color, hover, command, font_size=11, padx=8, pady=4):
@@ -65,12 +66,16 @@ class XMLToExcelPage(tk.Frame):
         tk.Label(
             s2,
             text=("Dòng 1 là tiêu đề. Chế độ được chọn tự động theo tên cột:\n"
-                  "• Có cột STUDY_ID và HRN → danh sách nghiên cứu: HRN được ghép "
-                  "với MA_LK (toàn bộ) hoặc 10 ký tự cuối của ID,\n"
-                  "   kết quả xuất ra cột STUDY_ID và ẩn ID/MA_LK. Có thêm "
-                  "START_DATE/END_DATE thì lọc NGAY_KQ theo khoảng đó (trọn ngày).\n"
+                  "• Có cột USUBJID và EMR_ID → danh sách nghiên cứu: EMR_ID được "
+                  "ghép với MA_LK (toàn bộ) hoặc 10 ký tự cuối của ID,\n"
+                  "   kết quả xuất ra cột USUBJID và ẩn ID/MA_LK. Có thêm "
+                  "START_DATE/END_DATE thì lọc NGAY_KQ theo khoảng đó (trọn ngày,\n"
+                  "   bản ghi ngoài khoảng bị loại hẳn, không xuất ra sheet nào). "
+                  "Có thêm sheet Summary tổng hợp theo USUBJID.\n"
                   "• Không có → mapping thường: ô A1 là tên trường XML4 dùng để "
-                  "ghép (ví dụ MA_DICH_VU), các cột còn lại được thêm vào."),
+                  "ghép (ví dụ MA_DICH_VU), các cột còn lại được thêm vào.\n"
+                  "• File tên dạng LabRequest_<đuôi>.xlsx sẽ tự gợi ý tên file "
+                  "xuất ra là LabResult_<đuôi>.xlsx."),
             font=("Helvetica", 10), bg=BG_CARD, fg=FG_DIM, justify="left",
         ).pack(anchor="w", padx=15, pady=(0, 8))
 
@@ -135,6 +140,21 @@ class XMLToExcelPage(tk.Frame):
             self.mapping_path = path
             self.mapping_lbl.config(text=f"  ✓  {os.path.basename(path)}", fg=ACCENT_GREEN)
             self.clear_map_btn.pack(side="left", padx=(8, 0))
+            self._suggest_output_name(path)
+
+    def _suggest_output_name(self, mapping_path):
+        """Đổi tên file output theo quy ước LabRequest_<đuôi> -> LabResult_<đuôi>.
+
+        Chỉ đổi PHẦN TÊN FILE, giữ nguyên thư mục đang chọn ở BƯỚC 3 (mặc định
+        hoặc do người dùng tự đặt trước đó) — không tự ý đổi luôn nơi lưu.
+        Tên file mapping không theo quy ước thì giữ nguyên output hiện tại.
+        """
+
+        new_name = study_mapping.derive_output_filename(mapping_path)
+        if not new_name:
+            return
+        current_dir = os.path.dirname(self.output_var.get().strip()) or str(APP_DIR)
+        self.output_var.set(os.path.join(current_dir, new_name))
 
     def _clear_mapping(self):
         self.mapping_path = None

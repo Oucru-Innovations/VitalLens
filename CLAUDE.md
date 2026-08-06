@@ -73,22 +73,25 @@ Note `XML4_EXCLUDED_COLUMNS` is applied only in `_sheet_columns()`; excluded fie
 
 ### The step-2 Excel file has two modes, picked by header
 
-One optional file picker on the XML page feeds two different services. `_collect_and_save` tries `study_mapping.load_study_mapping()` first; it returns `None` — not an error — when the header lacks `STUDY_ID` + `HRN`, and only then does the generic `mapping_excel.load_mapping()` run. Neither is cached: editing the file and re-running must show the new result.
+One optional file picker on the XML page feeds two different services. `_collect_and_save` tries `study_mapping.load_study_mapping()` first; it returns `None` — not an error — when the header lacks `USUBJID` + `EMR_ID` (`study_mapping.COL_STUDY_ID` / `COL_HRN` — renamed from the original `STUDY_ID`/`HRN` header names), and only then does the generic `mapping_excel.load_mapping()` run. Neither is cached: editing the file and re-running must show the new result.
 
 | | `services/mapping_excel.py` | `services/study_mapping.py` |
 | --- | --- | --- |
-| Trigger | anything else | header has both `STUDY_ID` and `HRN` |
+| Trigger | anything else | header has both `USUBJID` and `EMR_ID` |
 | Headers | user-defined; A1 = the XML4 field to join on | fixed names, column order irrelevant |
-| Effect | appends its columns, filters nothing | adds `STUDY_ID`, filters by date, hides `ID`/`MA_LK` |
+| Effect | appends its columns, filters nothing | adds `USUBJID`, filters by date, hides `ID`/`MA_LK` |
 
 Study mode specifics:
 
-- `HRN` is matched against `MA_LK` in full first, then against the **last 10 characters** of `ID` and `ID_GOC` (`STUDY_SUFFIX_FIELDS`). Full match wins because it is the stronger evidence. A value shorter than `ID_SUFFIX_LENGTH`, or two HRNs sharing the same last 10 characters, yields *no* match rather than a guess — a wrong `STUDY_ID` attaches one patient's data to another.
+- `EMR_ID` is matched against `MA_LK` in full first, then against the **last 10 characters** of `ID` and `ID_GOC` (`STUDY_SUFFIX_FIELDS`). Full match wins because it is the stronger evidence. A value shorter than `ID_SUFFIX_LENGTH`, or two EMR_IDs sharing the same last 10 characters, yields *no* match rather than a guess — a wrong `USUBJID` attaches one patient's data to another.
 - Date filtering compares **`yyyymmdd` only**, deliberately dropping the time part of `NGAY_KQ`, because both endpoints must count as full days. Start comes from `START_DATE`; end from the first of `END_DATE_HEADERS` present — `FROM_DATE` is in that list because real files name the end column that way.
-- An unparseable date in the mapping file **fails the run** (`StudyMappingError`); a record that matches an HRN but has no readable `NGAY_KQ` is **kept** and counted, same principle as a blank `MA_DICH_VU`.
-- Records with no `STUDY_ID` (no HRN match, or outside the window) go to sheet `XML4_KhongKhopHRN`, which **keeps `ID` and `MA_LK`** — the sheet exists so the user can fix their list, and hiding the identifiers there would make it useless. `ID_GOC` stays on every sheet.
+- An unparseable date in the mapping file **fails the run** (`StudyMappingError`); a record that matches an EMR_ID but has no readable `NGAY_KQ` is **kept** and counted, same principle as a blank `MA_DICH_VU`.
+- A record that matches `EMR_ID` but whose `NGAY_KQ` falls **outside** that row's mapping date range is **dropped entirely** — not written to any sheet, not counted as unmatched. This is deliberate: being outside the study window is conclusive evidence the record doesn't belong, unlike a missing `HRN`/`EMR_ID` match (which could be a typo the user needs to fix) or a missing date (which is inconclusive). Tracked separately in `stats["out_of_range"]` for the UI message.
+- Records with no `EMR_ID` match (not date-filtered ones — see above) go to sheet `XML4_KhongKhopHRN`, which **keeps `ID` and `MA_LK`** — the sheet exists so the user can fix their list, and hiding the identifiers there would make it useless. `ID_GOC` stays on every sheet.
 - Catalogue split runs first, so `Exclude` services never reach any sheet, including the unmatched one.
 - `_sheet_columns()` takes `lead_column` / `hidden_columns` per sheet; that is the only place `ID`/`MA_LK` are dropped, so the `XML4_EXCLUDED_COLUMNS` caveat above applies to them too.
+- In study mode, a `Summary` sheet is written first (before `XML4_Include` etc.), one row per `USUBJID`, built by `_build_summary_rows()`: the mapping file's declared date range for that study (min start / max end across its rows, from `_study_mapping_ranges()`) next to the actual `NGAY_KQ` range found in the exported records, plus distinct `MA_DICH_VU` count and row counts split into "hợp lệ" (catalogue-`Include`) vs "unknown" (unclassified). Only records that made it into a real sheet count here — dropped out-of-range records are invisible to the summary too.
+- If the step-2 file's name matches `LabRequest_<suffix>.xlsx` (case-insensitive), `study_mapping.derive_output_filename()` returns `LabResult_<suffix>.xlsx`, and `xml_page.py._pick_mapping` uses it to overwrite the BƯỚC-3 output filename (keeping whatever directory was already selected). Filenames that don't match the convention leave the output path untouched — no guessing.
 
 ### UI threading
 
@@ -100,7 +103,7 @@ Long work runs on daemon threads; Tk is touched only from the main thread. Two p
 | --- | --- | --- |
 | Lab PDF | Pages rasterized via pypdfium2, regions painted black — underlying text is gone, not covered | `services/pdf_redact.py` |
 | X-Ray | PaddleOCR detects burned-in text and paints it out; DICOM tags in `DICOM_PATIENT_TAGS` anonymized | `processing/xray.py` |
-| XML → Excel | Only XML4 is decoded; `XML4_EXCLUDED_COLUMNS` omitted **at column-selection time only**, and only catalogue-`Include` services reach the main sheet. With a study list, `ID`/`MA_LK` are replaced by `STUDY_ID` on the matched sheets (but not on `XML4_KhongKhopHRN`) | `processing/xml_to_excel.py` |
+| XML → Excel | Only XML4 is decoded; `XML4_EXCLUDED_COLUMNS` omitted **at column-selection time only**, and only catalogue-`Include` services reach the main sheet. With a study list, `ID`/`MA_LK` are replaced by `USUBJID` on the matched sheets (but not on `XML4_KhongKhopHRN`) | `processing/xml_to_excel.py` |
 | CSV export | Cells starting with `= + - @` get a `'` prefix (formula injection) | `pages/upload/page.py` |
 
 OCR false-positive thresholds (`OCR_DET_SCORE_THRESHOLD`, `OCR_REC_SCORE_THRESHOLD`, `OCR_MIN_TEXT_LENGTH`, `OCR_MIN_BBOX_AREA`) are constants at the top of `processing/xray.py`. Detection proposes regions, recognition validates them — only confirmed text is erased.

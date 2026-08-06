@@ -16,9 +16,13 @@ không thể khẳng định là Exclude, nên không được lặng lẽ vứt
 Ngoài danh mục cố định đó, người dùng có thể chọn thêm 1 file Excel ở BƯỚC 2.
 File này tuỳ chọn và được nhận dạng theo tiêu đề cột, chạy một trong hai chế độ:
 
-- Có đủ cột ``STUDY_ID`` + ``HRN`` → **danh sách nghiên cứu**
-  (``services/study_mapping.py``): gắn ``STUDY_ID``, lọc theo khoảng ngày, và
-  ẩn ``ID``/``MA_LK`` khỏi file xuất ra.
+- Có đủ cột ``USUBJID`` + ``EMR_ID`` → **danh sách nghiên cứu**
+  (``services/study_mapping.py``): gắn ``USUBJID``, lọc theo khoảng ngày (bản
+  ghi ngoài khoảng bị LOẠI HẲN, không vào sheet nào), và ẩn ``ID``/``MA_LK``
+  khỏi file xuất ra. Chế độ này còn thêm sheet ``Summary`` tổng hợp theo
+  ``USUBJID`` và, nếu tên file mapping theo quy ước ``LabRequest_<đuôi>.xlsx``,
+  gợi ý luôn tên file xuất ra ``LabResult_<đuôi>.xlsx``
+  (``study_mapping.derive_output_filename``, dùng ở ``pages/xml_page.py``).
 - Ngược lại → **mapping tổng quát** (``services/mapping_excel.py``): ô A1 là tên
   trường XML4 dùng để ghép, các cột còn lại được gắn thêm, không lọc gì.
 
@@ -54,16 +58,16 @@ XML4_EXCLUDED_COLUMNS = {"MA_BS_DOC_KQ"}
 SERVICE_CODE_COLUMN = "MA_DICH_VU"
 NAME_METHOD_COLUMN = medical_catalog.COL_NAME
 
-# Cột dùng cho danh sách nghiên cứu (BƯỚC 2, chế độ STUDY_ID).
+# Cột dùng cho danh sách nghiên cứu (BƯỚC 2, chế độ USUBJID/EMR_ID).
 STUDY_ID_COLUMN = study_mapping.COL_STUDY_ID
-LINK_CODE_COLUMN = "MA_LK"          # khớp TOÀN BỘ với HRN
+LINK_CODE_COLUMN = "MA_LK"          # khớp TOÀN BỘ với EMR_ID
 RESULT_DATE_COLUMN = "NGAY_KQ"      # yyyymmddhhmm — nguồn để lọc theo khoảng ngày
 
-# Các trường thử khớp 10 ký tự cuối với HRN, theo đúng thứ tự ưu tiên. ``ID`` là
-# tên file XML (process_xml_file ghi đè), ``ID_GOC`` là ID gốc trong hồ sơ.
+# Các trường thử khớp 10 ký tự cuối với EMR_ID, theo đúng thứ tự ưu tiên. ``ID``
+# là tên file XML (process_xml_file ghi đè), ``ID_GOC`` là ID gốc trong hồ sơ.
 STUDY_SUFFIX_FIELDS = ("ID", "ID_GOC")
 
-# Đã có STUDY_ID thì hai định danh gốc này bị ẩn khỏi file xuất ra (yêu cầu ẩn
+# Đã có USUBJID thì hai định danh gốc này bị ẩn khỏi file xuất ra (yêu cầu ẩn
 # danh). ID_GOC được GIỮ LẠI có chủ đích — người dùng cần nó để đối chiếu.
 STUDY_HIDDEN_COLUMNS = frozenset({"ID", LINK_CODE_COLUMN})
 
@@ -71,6 +75,14 @@ STUDY_HIDDEN_COLUMNS = frozenset({"ID", LINK_CODE_COLUMN})
 SHEET_INCLUDE = "XML4_Include"
 SHEET_UNCLASSIFIED = "XML4_ChuaPhanLoai"
 SHEET_NO_STUDY = "XML4_KhongKhopHRN"
+SHEET_SUMMARY = "Summary"
+
+# Cột cố định của sheet Summary (chỉ có khi chạy chế độ danh sách nghiên cứu).
+SUMMARY_COLUMNS = (
+    "Mapping_TuNgay", "Mapping_DenNgay",
+    "XML_TuNgay", "XML_DenNgay",
+    "So_MaDichVu", "So_Row_HopLe", "So_Row_Unknown",
+)
 
 # Hai byte đầu của một stream GZIP.
 GZIP_MAGIC = b"\x1f\x8b"
@@ -240,8 +252,9 @@ def _sheet_columns(records, extra_columns=(), lead_column="ID", hidden_columns=(
     phải thấy cột của nó, dù rỗng, mới biết là không khớp được gì.
 
     ``lead_column`` / ``hidden_columns`` khác nhau theo từng sheet: sheet có
-    STUDY_ID thì ẩn ID và MA_LK, còn sheet "không khớp HRN" phải giữ nguyên hai
-    cột đó — nó tồn tại để người dùng rà soát, ẩn định danh đi thì rà bằng gì.
+    USUBJID thì ẩn ID và MA_LK, còn sheet "không khớp EMR_ID" phải giữ nguyên
+    hai cột đó — nó tồn tại để người dùng rà soát, ẩn định danh đi thì rà bằng
+    gì.
     """
 
     columns = [lead_column] + [
@@ -314,7 +327,7 @@ def _apply_mapping(records, mapping):
 def _match_study(rec, study):
     """Tìm dòng danh sách nghiên cứu ứng với 1 bản ghi XML4.
 
-    Thứ tự thử: ``MA_LK`` khớp TOÀN BỘ HRN trước, sau đó ``ID`` rồi ``ID_GOC``
+    Thứ tự thử: ``MA_LK`` khớp TOÀN BỘ EMR_ID trước, sau đó ``ID`` rồi ``ID_GOC``
     khớp 10 ký tự cuối. Khớp toàn bộ chắc chắn hơn nên phải được ưu tiên; khớp
     theo hậu tố chỉ là phương án dự phòng khi hồ sơ không có MA_LK.
     """
@@ -334,17 +347,22 @@ def _new_study_stats():
 
 
 def _split_by_study(records, study, stats):
-    """Chia bản ghi theo danh sách nghiên cứu. Trả ``(khớp, không khớp)``.
+    """Chia bản ghi theo danh sách nghiên cứu. Trả ``(khớp, không khớp EMR_ID)``.
 
-    Bản ghi khớp HRN được gắn ``STUDY_ID``; bản ghi không khớp, hoặc khớp nhưng
-    ``NGAY_KQ`` nằm ngoài khoảng ngày, đều rơi vào nhóm "không khớp" — nhóm này
-    vẫn được xuất ra sheet riêng chứ không bị vứt đi, để người dùng còn rà lại
-    file danh sách của mình.
+    Bản ghi khớp ``EMR_ID`` được gắn ``USUBJID``. Bản ghi KHÔNG khớp EMR_ID rơi
+    vào nhóm "không khớp" thứ hai — nhóm này vẫn được xuất ra sheet riêng
+    (``XML4_KhongKhopHRN``) để người dùng rà lại file danh sách của mình.
 
-    Bản ghi khớp HRN nhưng thiếu/hỏng ``NGAY_KQ`` thì được GIỮ: không có ngày
-    không phải là bằng chứng nằm ngoài khoảng nghiên cứu (cùng lối xử lý với
-    ``MA_DICH_VU`` rỗng ở ``_split_by_catalog``). Số này được đếm riêng và báo
-    lên UI để người dùng tự quyết.
+    Bản ghi khớp EMR_ID nhưng ``NGAY_KQ`` nằm NGOÀI khoảng ngày của mapping thì
+    bị LOẠI HẲN — không vào ``matched`` lẫn ``unmatched``, tức không được ghi
+    vào bất kỳ sheet nào. Khác với việc không khớp EMR_ID (có thể là lỗi đánh
+    máy trong file danh sách, cần rà lại), nằm ngoài khoảng ngày là bằng chứng
+    RÕ RÀNG bản ghi không thuộc phạm vi nghiên cứu, nên không có gì để rà soát.
+
+    Bản ghi khớp EMR_ID nhưng thiếu/hỏng ``NGAY_KQ`` thì được GIỮ (vào
+    ``matched``): không có ngày không phải là bằng chứng nằm ngoài khoảng
+    nghiên cứu (cùng lối xử lý với ``MA_DICH_VU`` rỗng ở ``_split_by_catalog``).
+    Số này được đếm riêng và báo lên UI để người dùng tự quyết.
 
     Sửa trực tiếp dict trong ``records``, cùng lý do với ``_split_by_catalog``.
     """
@@ -363,8 +381,7 @@ def _split_by_study(records, study, stats):
                 stats["missing_date"] += 1
             elif not row.covers(day):
                 stats["out_of_range"] += 1
-                unmatched.append(rec)
-                continue
+                continue  # loại hẳn — không vào sheet nào
 
         rec[STUDY_ID_COLUMN] = row.study_id
         stats["matched"] += 1
@@ -386,19 +403,98 @@ def _study_note(study, stats):
             f"{study.end_column or '(không có)'} (trọn ngày)"
         )
     parts.append(".")
-    if stats["no_hrn"] or stats["out_of_range"]:
-        detail = []
-        if stats["no_hrn"]:
-            detail.append(f"{stats['no_hrn']} không khớp {study_mapping.COL_HRN}")
-        if stats["out_of_range"]:
-            detail.append(f"{stats['out_of_range']} ngoài khoảng ngày")
-        parts.append(f" {', '.join(detail)} → sheet {SHEET_NO_STUDY}.")
+    if stats["no_hrn"]:
+        parts.append(
+            f" {stats['no_hrn']} không khớp {study_mapping.COL_HRN} "
+            f"→ sheet {SHEET_NO_STUDY}."
+        )
+    if stats["out_of_range"]:
+        parts.append(
+            f" {stats['out_of_range']} khớp {study_mapping.COL_HRN} nhưng "
+            f"{RESULT_DATE_COLUMN} ngoài khoảng ngày → đã LOẠI HẲN, "
+            f"không lưu vào sheet nào."
+        )
     if stats["missing_date"]:
         parts.append(
-            f" ⚠ {stats['missing_date']} bản ghi khớp HRN nhưng thiếu "
-            f"{RESULT_DATE_COLUMN} — đã giữ lại, cần rà thủ công."
+            f" ⚠ {stats['missing_date']} bản ghi khớp {study_mapping.COL_HRN} "
+            f"nhưng thiếu {RESULT_DATE_COLUMN} — đã giữ lại, cần rà thủ công."
         )
     return "".join(parts)
+
+
+def _fmt_yyyymmdd(day):
+    """``19850102`` -> ``"1985-01-02"``. ``None`` -> chuỗi rỗng."""
+
+    if day is None:
+        return ""
+    return f"{day // 10000:04d}-{day // 100 % 100:02d}-{day % 100:02d}"
+
+
+def _study_mapping_ranges(study):
+    """``USUBJID`` -> (ngày bắt đầu nhỏ nhất, ngày kết thúc lớn nhất) theo file mapping.
+
+    Mỗi ``USUBJID`` có thể lặp lại trên nhiều dòng (một dòng/bệnh nhân) với
+    khoảng ngày riêng từng dòng; sheet Summary báo khoảng NGOÀI CÙNG bao trọn
+    mọi bệnh nhân của nghiên cứu đó, không phải khoảng của một dòng bất kỳ.
+    """
+
+    ranges = {}
+    for row in study.by_hrn.values():
+        start, end = ranges.setdefault(row.study_id, [None, None])
+        if row.start_date is not None:
+            start = row.start_date if start is None else min(start, row.start_date)
+        if row.end_date is not None:
+            end = row.end_date if end is None else max(end, row.end_date)
+        ranges[row.study_id] = [start, end]
+    return ranges
+
+
+def _build_summary_rows(included, unclassified, study):
+    """Gộp thống kê theo ``USUBJID`` cho sheet Summary.
+
+    So sánh khoảng ngày KHAI BÁO trong file mapping với khoảng ngày THỰC TẾ có
+    trong dữ liệu XML đã xuất — hai khoảng lệch nhau là dấu hiệu người dùng
+    nên xem lại (ví dụ nghiên cứu khai 6 tháng nhưng dữ liệu XML chỉ có 2
+    tháng đầu). Chỉ tính trên bản ghi ĐÃ xuất ra sheet (khớp EMR_ID và, nếu có
+    khoảng ngày, nằm trong khoảng) — bản ghi bị loại ở ``_split_by_study``
+    không góp phần vào đây, cùng logic với việc chúng không vào sheet nào.
+    """
+
+    mapping_ranges = _study_mapping_ranges(study)
+    stats = {}
+    for records, is_valid in ((included, True), (unclassified, False)):
+        for rec in records:
+            study_id = rec.get(STUDY_ID_COLUMN)
+            if not study_id:
+                continue
+            entry = stats.setdefault(study_id, {
+                "n_valid": 0, "n_unknown": 0, "services": set(),
+                "xml_min": None, "xml_max": None,
+            })
+            entry["n_valid" if is_valid else "n_unknown"] += 1
+            code = rec.get(SERVICE_CODE_COLUMN)
+            if code:
+                entry["services"].add(code)
+            day = study_mapping.parse_record_date(rec.get(RESULT_DATE_COLUMN))
+            if day is not None:
+                entry["xml_min"] = day if entry["xml_min"] is None else min(entry["xml_min"], day)
+                entry["xml_max"] = day if entry["xml_max"] is None else max(entry["xml_max"], day)
+
+    rows = []
+    for study_id in sorted(stats):
+        entry = stats[study_id]
+        map_start, map_end = mapping_ranges.get(study_id, (None, None))
+        rows.append({
+            STUDY_ID_COLUMN: study_id,
+            "Mapping_TuNgay": _fmt_yyyymmdd(map_start),
+            "Mapping_DenNgay": _fmt_yyyymmdd(map_end),
+            "XML_TuNgay": _fmt_yyyymmdd(entry["xml_min"]),
+            "XML_DenNgay": _fmt_yyyymmdd(entry["xml_max"]),
+            "So_MaDichVu": len(entry["services"]),
+            "So_Row_HopLe": entry["n_valid"],
+            "So_Row_Unknown": entry["n_unknown"],
+        })
+    return rows
 
 
 def _dropped_input_warning(failed_files, n_bad_payloads):
@@ -439,7 +535,7 @@ def _collect_and_save(xml_files, output_path, mapping_path=None):
     # vì bắt người dùng chờ hết mấy phút decode rồi mới đổ lỗi.
     #
     # Chế độ được chọn theo TIÊU ĐỀ CỘT, không theo một nút bấm riêng: file có
-    # đủ STUDY_ID + HRN là danh sách nghiên cứu, còn lại là mapping tổng quát.
+    # đủ USUBJID + EMR_ID là danh sách nghiên cứu, còn lại là mapping tổng quát.
     # Người dùng chỉ có một nút "Chọn file mapping" và không phải nhớ mình đang
     # ở chế độ nào.
     study = None
@@ -507,6 +603,7 @@ def _collect_and_save(xml_files, output_path, mapping_path=None):
         )
 
     # Mỗi sheet mang bộ cột riêng: (tên sheet, bản ghi, cột đứng đầu, cột bị ẩn).
+    summary_rows = []
     if study is None:
         sheets = [
             (SHEET_INCLUDE, included, "ID", ()),
@@ -517,6 +614,10 @@ def _collect_and_save(xml_files, output_path, mapping_path=None):
         included, no_study_inc = _split_by_study(included, study, stats)
         unclassified, no_study_unc = _split_by_study(unclassified, study, stats)
         mapping_note = _study_note(study, stats)
+        # Tính Summary TRƯỚC khi included/unclassified có thêm cột mapping ở
+        # dưới — không ảnh hưởng gì (chỉ đọc STUDY_ID_COLUMN/SERVICE_CODE_COLUMN
+        # /RESULT_DATE_COLUMN) nhưng để cạnh _split_by_study cho dễ theo dõi.
+        summary_rows = _build_summary_rows(included, unclassified, study)
         sheets = [
             (SHEET_INCLUDE, included, STUDY_ID_COLUMN, STUDY_HIDDEN_COLUMNS),
             (SHEET_UNCLASSIFIED, unclassified, STUDY_ID_COLUMN, STUDY_HIDDEN_COLUMNS),
@@ -527,6 +628,16 @@ def _collect_and_save(xml_files, output_path, mapping_path=None):
     # write_only: openpyxl ghi thẳng từng dòng ra file thay vì dựng toàn bộ đối
     # tượng Cell trong RAM. Một lô XML4 lớn có thể lên hàng trăm nghìn dòng.
     wb = Workbook(write_only=True)
+
+    if summary_rows:
+        # Summary đứng đầu tiên — người dùng mở file là thấy tổng quan ngay,
+        # không phải lội qua các sheet dữ liệu thô trước.
+        ws = wb.create_sheet(title=sanitize_sheet_name(SHEET_SUMMARY, default="Sheet"))
+        summary_columns = [STUDY_ID_COLUMN] + list(SUMMARY_COLUMNS)
+        append_row_as_text(ws, summary_columns)
+        for rec in summary_rows:
+            append_row_as_text(ws, [rec.get(c, "") for c in summary_columns])
+
     for title, records, lead_column, hidden_columns in sheets:
         if not records:
             continue

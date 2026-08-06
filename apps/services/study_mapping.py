@@ -1,4 +1,4 @@
-"""File Excel danh sách nghiên cứu — gắn ``STUDY_ID`` và lọc theo khoảng ngày.
+"""File Excel danh sách nghiên cứu — gắn ``USUBJID`` và lọc theo khoảng ngày.
 
 Đây là loại mapping thứ BA trong dự án, đừng lẫn với hai loại kia:
 
@@ -6,19 +6,21 @@
                      medical_catalog       mapping_excel         study_mapping
 ===================  ====================  ====================  ===================
 Nguồn                dữ liệu phát hành     người dùng chọn       người dùng chọn
-Tiêu đề cột          cố định trong code    do người dùng đặt     cố định (STUDY_ID,
-                                                                 HRN, ngày)
-Vai trò              lọc Include/Exclude   chỉ gắn thêm cột      gắn STUDY_ID, lọc
+Tiêu đề cột          cố định trong code    do người dùng đặt     cố định (USUBJID,
+                                                                 EMR_ID, ngày)
+Vai trò              lọc Include/Exclude   chỉ gắn thêm cột      gắn USUBJID, lọc
                                                                  theo ngày, ẩn định
                                                                  danh gốc
 ===================  ====================  ====================  ===================
 
 Quy ước file (dòng 1 là tiêu đề, thứ tự cột không quan trọng):
 
-- ``STUDY_ID`` — mã nghiên cứu, là cột DUY NHẤT được đưa vào file xuất ra.
-- ``HRN`` — định danh bệnh nhân, dùng để ghép với hồ sơ XML4 theo hai cách:
+- ``USUBJID`` — mã nghiên cứu, là cột DUY NHẤT được đưa vào file xuất ra.
+- ``EMR_ID`` — định danh bệnh nhân, dùng để ghép với hồ sơ XML4 theo hai cách:
   khớp TOÀN BỘ với ``MA_LK``, hoặc khớp **10 ký tự cuối** với ``ID`` / ``ID_GOC``.
   Hai cách này được thử theo đúng thứ tự đó (xem ``xml_to_excel._match_study``).
+  (Tên cột từng là ``STUDY_ID``/``HRN``; đổi tên để khớp chuẩn CDISC USUBJID và
+  quy ước EMR nội bộ — xem yêu cầu đổi tên trong lịch sử commit.)
 - Cột ngày bắt đầu (``START_DATE``) và ngày kết thúc (``END_DATE`` / ``FROM_DATE``
   / ``TO_DATE``…) là TUỲ CHỌN: có giá trị thì lọc, bỏ trống thì lấy hết.
 
@@ -34,7 +36,10 @@ việc ``NGAY_KQ`` có bao nhiêu chữ số giờ/phút/giây.
 
 Ngày ghi sai trong file mapping thì DỪNG HẲN, không âm thầm bỏ qua: một khoảng
 ngày bị lờ đi có nghĩa là dữ liệu ra nhiều hơn phạm vi nghiên cứu mà không ai
-biết.
+biết. Ngược lại, một bản ghi XML4 khớp EMR_ID nhưng NGAY_KQ nằm NGOÀI khoảng
+ngày của mapping thì bị loại bỏ HẲN — không ghi vào bất kỳ sheet nào (xem
+``xml_to_excel._split_by_study``), vì với dữ liệu nghiên cứu, ở ngoài phạm vi
+thời gian nghĩa là không thuộc nghiên cứu, không phải "cần rà soát thêm".
 """
 
 from __future__ import annotations
@@ -60,8 +65,8 @@ log = logging.getLogger(__name__)
 
 # Tên cột bắt buộc. Thiếu một trong hai thì file không phải danh sách nghiên
 # cứu và caller sẽ quay về mapping tổng quát (mapping_excel).
-COL_STUDY_ID = "STUDY_ID"
-COL_HRN = "HRN"
+COL_STUDY_ID = "USUBJID"
+COL_HRN = "EMR_ID"
 
 # Cột ngày bắt đầu chỉ nhận đúng một tên; ngày kết thúc nhận nhiều biến thể.
 START_DATE_HEADERS = ("START_DATE",)
@@ -142,7 +147,7 @@ class StudyMapping:
         key = normalize_key(value)
         if len(key) < ID_SUFFIX_LENGTH:
             # Ngắn hơn 10 ký tự thì không đủ căn cứ để khẳng định trùng — bỏ,
-            # thà không khớp còn hơn gán nhầm STUDY_ID cho bệnh nhân khác.
+            # thà không khớp còn hơn gán nhầm USUBJID cho bệnh nhân khác.
             return None
         return self.by_suffix.get(key[-ID_SUFFIX_LENGTH:])
 
@@ -180,7 +185,7 @@ def _cell_display(value) -> str:
     """Ép ô Excel về chuỗi hiển thị, giữ nguyên hoa/thường.
 
     openpyxl trả số nguyên dưới dạng float (``1054.0``) — để nguyên thì
-    ``STUDY_ID`` số sẽ ra ``"1054.0"`` trong file xuất.
+    ``USUBJID`` số sẽ ra ``"1054.0"`` trong file xuất.
     """
 
     if value is None:
@@ -264,8 +269,8 @@ def _cell_at(row, position: Optional[int]):
 def load_study_mapping(path) -> Optional[StudyMapping]:
     """Nạp file danh sách nghiên cứu.
 
-    Trả ``None`` nếu file Excel hợp lệ nhưng KHÔNG có đủ cột ``STUDY_ID`` và
-    ``HRN`` — khi đó caller quay về mapping tổng quát ``mapping_excel``. Ném
+    Trả ``None`` nếu file Excel hợp lệ nhưng KHÔNG có đủ cột ``USUBJID`` và
+    ``EMR_ID`` — khi đó caller quay về mapping tổng quát ``mapping_excel``. Ném
     ``StudyMappingError`` nếu file không mở/không đọc được, hoặc có cột đúng
     nhưng nội dung sai.
 
@@ -402,15 +407,49 @@ def load_study_mapping(path) -> Optional[StudyMapping]:
     )
 
 
+# File BƯỚC 2 của người dùng theo quy ước tên
+# ``LabRequest_<phần đuôi>.xlsx`` (ví dụ ``LabRequest_13NV-XXX_dd.mm.yyyy_.xlsx``).
+INPUT_FILENAME_PREFIX = "LabRequest"
+OUTPUT_FILENAME_PREFIX = "LabResult"
+
+_INPUT_FILENAME_RE = re.compile(
+    r"^" + re.escape(INPUT_FILENAME_PREFIX) + r"(_.*)?$", re.IGNORECASE
+)
+
+
+def derive_output_filename(mapping_filename) -> Optional[str]:
+    """Suy tên file Excel xuất ra từ tên file mapping BƯỚC 2.
+
+    File mapping theo đúng quy ước ``LabRequest_<đuôi>.xlsx`` thì phần đuôi
+    (mã bệnh nhân/khoa, ngày…) được GIỮ NGUYÊN, chỉ tiền tố đổi thành
+    ``LabResult`` — output phải cùng một "lô" với input để người dùng đối
+    chiếu qua tên file mà không cần mở ra xem. Trả ``None`` nếu tên file
+    không theo quy ước này; khi đó caller giữ nguyên tên output đang có
+    (mặc định hoặc do người dùng tự chọn), không đoán bừa.
+    """
+
+    name = Path(mapping_filename).name
+    stem = Path(name).stem
+    ext = Path(name).suffix
+    m = _INPUT_FILENAME_RE.match(stem)
+    if not m:
+        return None
+    suffix = m.group(1) or ""
+    return f"{OUTPUT_FILENAME_PREFIX}{suffix}{ext}"
+
+
 __all__ = [
     "COL_HRN",
     "COL_STUDY_ID",
     "END_DATE_HEADERS",
     "ID_SUFFIX_LENGTH",
+    "INPUT_FILENAME_PREFIX",
+    "OUTPUT_FILENAME_PREFIX",
     "START_DATE_HEADERS",
     "StudyMapping",
     "StudyMappingError",
     "StudyRow",
+    "derive_output_filename",
     "load_study_mapping",
     "parse_record_date",
 ]
