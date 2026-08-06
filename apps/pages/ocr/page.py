@@ -12,7 +12,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk
@@ -33,21 +32,16 @@ from apps.config import (
     SFTP_DEMO_MODE,
     SFTP_HOST,
     SFTP_PATH,
-    SFTP_PORT,
 )
 from apps.services import lab_records
 from apps.services.excel_export import write_rows_to_xlsx
 from apps.services.lab_records import LAB_VALIDATE_TYPES, format_date_token
 from apps.services.payload_io import read_csv, read_json, write_csv, write_json
-from apps.services.storage import (
-    LocalBackend,
-    SftpBackend,
-    StorageBackend,
-    safe_is_dir,
-)
+from apps.services.storage import StorageBackend, safe_is_dir
 from apps.widgets import (
     StatusBar,
     StyledButton,
+    ensure_sftp_backend,
     make_header,
     make_section,
     ScrollableFrame,
@@ -124,54 +118,17 @@ class OCRPage(tk.Frame):
     def _build_login_section(self) -> None:
         s1 = make_section(self.body, "ĐĂNG NHẬP SFTP")
 
-        row_user = tk.Frame(s1, bg=BG_CARD)
-        row_user.pack(fill="x", padx=15, pady=4)
         tk.Label(
-            row_user,
-            text="Username:",
-            font=("Helvetica", 12),
+            s1,
+            text=(
+                "Kết nối SFTP"
+            ),
+            font=("Helvetica", 10),
             bg=BG_CARD,
-            fg=FG_TEXT,
-            width=10,
-            anchor="e",
-        ).pack(side="left")
-        self.user_var = tk.StringVar(value="")
-        tk.Entry(
-            row_user,
-            textvariable=self.user_var,
-            font=("Helvetica", 12),
-            bg=BG_INPUT,
-            fg=FG_TEXT,
-            insertbackground=FG_TEXT,
-            borderwidth=0,
-            highlightthickness=1,
-            highlightcolor=ACCENT_BLUE,
-        ).pack(side="left", fill="x", expand=True, ipady=5, padx=(8, 0))
-
-        row_pass = tk.Frame(s1, bg=BG_CARD)
-        row_pass.pack(fill="x", padx=15, pady=(4, 12))
-        tk.Label(
-            row_pass,
-            text="Password:",
-            font=("Helvetica", 12),
-            bg=BG_CARD,
-            fg=FG_TEXT,
-            width=10,
-            anchor="e",
-        ).pack(side="left")
-        self.pass_var = tk.StringVar(value="")
-        tk.Entry(
-            row_pass,
-            textvariable=self.pass_var,
-            font=("Helvetica", 12),
-            show="●",
-            bg=BG_INPUT,
-            fg=FG_TEXT,
-            insertbackground=FG_TEXT,
-            borderwidth=0,
-            highlightthickness=1,
-            highlightcolor=ACCENT_BLUE,
-        ).pack(side="left", fill="x", expand=True, ipady=5, padx=(8, 0))
+            fg=FG_DIM,
+            justify="left",
+            wraplength=520,
+        ).pack(padx=15, pady=(0, 10), anchor="w")
 
         btn_frame = tk.Frame(s1, bg=BG_CARD)
         btn_frame.pack(pady=(0, 15))
@@ -203,50 +160,9 @@ class OCRPage(tk.Frame):
     # =====================================================================
 
     def _connect_sftp(self) -> None:
-        if SFTP_DEMO_MODE:
-            self.connect_btn.set_state("disabled")
-            self.status.set("Đang kết nối (DEMO)...", "working")
-            self.after(500, lambda: self._on_connected(LocalBackend()))
-            return
-
-        host = SFTP_HOST.strip()
-        port = SFTP_PORT
-        username = self.user_var.get().strip()
-        password = self.pass_var.get()
-
-        if not host:
-            show_warning(self, "Thiếu thông tin", "Chưa cấu hình host SFTP trong code.")
-            return
-        if not username:
-            show_warning(self, "Thiếu thông tin", "Vui lòng nhập username.")
-            return
-        if not password:
-            show_warning(self, "Thiếu thông tin", "Vui lòng nhập password.")
-            return
-
         self.connect_btn.set_state("disabled")
         self.status.set("Đang kết nối...", "working")
-
-        def do_connect() -> None:
-            try:
-                import paramiko
-
-                transport = paramiko.Transport((host, port))
-                transport.connect(username=username, password=password)
-                sftp = paramiko.SFTPClient.from_transport(transport)
-                backend = SftpBackend(sftp, transport)
-                self.controller.after(0, lambda: self._on_connected(backend))
-            except ImportError:
-                self.controller.after(
-                    0,
-                    lambda: self._on_connect_fail(
-                        "Thiếu thư viện paramiko. Chạy: pip install paramiko"
-                    ),
-                )
-            except Exception as e:  # noqa: BLE001 - network layer
-                self.controller.after(0, lambda: self._on_connect_fail(str(e)))
-
-        threading.Thread(target=do_connect, daemon=True).start()
+        ensure_sftp_backend(self, self._on_connected, self._on_connect_fail)
 
     def _on_connected(self, backend: StorageBackend) -> None:
         self.backend = backend

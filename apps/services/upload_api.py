@@ -19,16 +19,24 @@ trường hợp đó trả ``retryable=True`` để người dùng tự quyết 
 Gửi cả lô: tạo một ``Session`` bằng `make_session()` rồi truyền vào từng lời
 gọi để tái dùng kết nối TCP/TLS thay vì bắt tay lại cho mỗi file. Truyền
 ``cancel_event`` để dừng lô giữa chừng khi người dùng bấm Hủy hoặc đóng app.
+
+Ngoài các hàm HTTP (`upload_pair`, `upload_files_http`) và primitive SFTP
+(`upload_files_sftp`), file này còn định nghĩa tầng Strategy dùng chung cho
+UI: `UploadJob`, `Uploader` (Protocol), `HttpUploader`, `SftpUploader` - xem
+`apps.widgets.upload_batch.run_upload_batch`.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Iterable, Optional, Protocol, runtime_checkable
+
+from apps.services.storage import LocalBackend, StorageBackend, ensure_remote_dir
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +67,27 @@ class UploadResult:
     # True = lỗi tạm thời (mạng/server bận) → để ở Pending và thử lại sau.
     retryable: bool = False
     cancelled: bool = False
+
+
+@dataclass
+class UploadJob:
+    """Một lượt upload: nhãn hiển thị + danh sách file cục bộ.
+
+    HTTP: mỗi job gồm 1 file (label = tên file). SFTP: mỗi job là một nhóm
+    (label = thư mục nhận, files = các file trong nhóm đó).
+    """
+
+    label: str
+    files: list[str]
+
+
+@runtime_checkable
+class Uploader(Protocol):
+    """Strategy chung cho việc upload một `UploadJob` (HTTP hoặc SFTP)."""
+
+    def upload(
+        self, job: UploadJob, on_file_done: Optional[Callable[[str], None]] = None
+    ) -> UploadResult: ...
 
 
 def make_session() -> Any:
@@ -340,6 +369,183 @@ def upload_pair(
     return UploadResult(True, last_status, "OK", pdf_ok, csv_ok)
 
 
+def upload_files_http(
+    url: str,
+    bearer_token: Optional[str],
+    file_path: str,
+    owner: str = "",
+    timeout: float = 60.0,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    retry_backoff: float = DEFAULT_BACKOFF,
+) -> UploadResult:
+    """POST một file bất kỳ tới `url` (dùng cho MultiUpload - chỉ áp dụng
+    cho file loại Pdf, backend hiện chỉ nhận cho PDF).
+
+    Dùng chung `_send_one` với `upload_pair`, cùng chính sách retry (mặc định
+    `DEFAULT_MAX_RETRIES`/`DEFAULT_BACKOFF`, có thể override). Không raise,
+    luôn trả UploadResult.
+    """
+
+    log.info("=== upload_files_http BẮT ĐẦU ===")
+    log.info("  URL   : %s", url)
+    log.info("  File  : %s", file_path)
+    log.info("  Owner : %s", owner or "(không có)")
+
+    if not url:
+        log.error("  [FAIL] API_UPLOAD_URL chưa được cấu hình.")
+        return UploadResult(False, None, "Chưa cấu hình API_UPLOAD_URL")
+
+    session = make_session()
+    if session is None:
+        log.error("  [FAIL] Thiếu thư viện 'requests'.")
+        return UploadResult(
+            False, None, "Thiếu thư viện requests. Chạy: pip install requests"
+        )
+
+    headers = {}
+    if bearer_token:
+        headers["Authorization"] = f"Bearer {bearer_token}"
+
+    label = os.path.basename(file_path)
+    try:
+        ok, status, message, retryable = _send_one(
+            session, url, headers, label, file_path, "application/pdf", owner,
+            timeout, max_retries=max_retries, backoff=retry_backoff,
+        )
+    finally:
+        try:
+            session.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    log.info("=== upload_files_http KẾT THÚC: %s ===", "OK" if ok else "FAIL")
+    return UploadResult(ok, status, message, retryable=retryable)
+
+
+def upload_files_sftp(
+    backend: StorageBackend,
+    remote_base: str,
+    child_path: str,
+    file_paths: Iterable[str],
+    on_file_done: Optional[Callable[[str], None]] = None,
+) -> UploadResult:
+    """Gửi các file local lên `remote_base/child_path` qua `backend` SFTP.
+
+    Thư mục được tạo tự động nếu chưa tồn tại. 
+    """
+
+    log.info("=== upload_files_sftp BẮT ĐẦU ===")
+    log.info("  Remote base : %s", remote_base)
+    log.info("  Child path  : %s", child_path)
+
+    if not remote_base:
+        log.error("  [FAIL] SFTP_BUFFER_PATH chưa được cấu hình.")
+        return UploadResult(False, None, "Chưa cấu hình SFTP_BUFFER_PATH")
+
+    remote_dir = backend.join(remote_base, child_path) if child_path else remote_base
+
+    try:
+        ensure_remote_dir(backend, remote_dir)
+    except Exception as e:  # noqa: BLE001
+        log.exception("  [FAIL] Không thể tạo thư mục remote %s", remote_dir)
+        return UploadResult(False, None, f"Không thể tạo thư mục remote: {e}")
+
+    count = 0
+    for local_path in file_paths:
+        name = os.path.basename(local_path)
+        remote_path = backend.join(remote_dir, name)
+        log.info("  Đang gửi %s -> %s", local_path, remote_path)
+        try:
+            data = LocalBackend().read_bytes(local_path)
+            backend.write_bytes(remote_path, data)
+            count += 1
+            if on_file_done is not None:
+                on_file_done(local_path)
+        except Exception as e:  # noqa: BLE001
+            log.warning("  [FAIL] Lỗi upload %s: %s", name, e)
+            return UploadResult(False, None, f"Lỗi upload {name}: {e}")
+
+    log.info("  [OK] Upload %d file lên %s", count, remote_dir)
+    log.info("=== upload_files_sftp KẾT THÚC: OK ===")
+    return UploadResult(True, None, f"Đã upload {count} file lên {remote_dir}")
+
+
+def sanitize_path_segment(raw: str) -> str:
+    """Chuẩn hoá text trong tên thư mục remote: chỉ giữ [A-Za-z0-9_-] (giữ nguyên
+    hoa/thường), phần còn lại gộp thành '-'. Rỗng/không hợp lệ → 'misc'."""
+
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", (raw or "").strip()).strip("-")
+    return cleaned or "misc"
+
+
+def infer_sftp_child_path(study: str, patient: str, date_token: str, data_type: str) -> str:
+    """Trích thư mục con SFTP: '<study>/<patient>/<date>/<data_type>'.
+    """
+
+    study = (study or "").strip()
+    patient = (patient or "").strip()
+    date_token = (date_token or "").strip()
+    if not study or not patient or not date_token:
+        raise ValueError("study, patient và date_token không được rỗng")
+
+    segments = [
+        sanitize_path_segment(study),
+        sanitize_path_segment(patient),
+        sanitize_path_segment(date_token),
+        sanitize_path_segment(data_type),
+    ]
+    return "/".join(segments)
+
+
+class HttpUploader:
+    """Uploader HTTP -`upload_files_http`. Gửi từng file)."""
+
+    def __init__(
+        self,
+        url: str,
+        bearer_token: Optional[str],
+        owner: str = "",
+        timeout: float = 60.0,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_backoff: float = DEFAULT_BACKOFF,
+    ) -> None:
+        self.url = url
+        self.bearer_token = bearer_token
+        self.owner = owner
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.retry_backoff = retry_backoff
+
+    def upload(
+        self, job: UploadJob, on_file_done: Optional[Callable[[str], None]] = None
+    ) -> UploadResult:
+        file_path = job.files[0]
+        result = upload_files_http(
+            self.url, self.bearer_token, file_path,
+            owner=self.owner, timeout=self.timeout,
+            max_retries=self.max_retries, retry_backoff=self.retry_backoff,
+        )
+        if result.ok and on_file_done is not None:
+            on_file_done(file_path)
+        return result
+
+
+class SftpUploader:
+    """Uploader SFTP `upload_files_sftp`. ."""
+
+    def __init__(self, backend: StorageBackend, remote_base: str) -> None:
+        self.backend = backend
+        self.remote_base = remote_base
+
+    def upload(
+        self, job: UploadJob, on_file_done: Optional[Callable[[str], None]] = None
+    ) -> UploadResult:
+        return upload_files_sftp(
+            self.backend, self.remote_base, job.label, job.files,
+            on_file_done=on_file_done,
+        )
+
+
 __all__ = [
     "UploadResult",
     "UploadCancelled",
@@ -347,4 +553,12 @@ __all__ = [
     "make_session",
     "RETRYABLE_STATUS",
     "USER_RETRYABLE_STATUS",
+    "upload_files_http",
+    "upload_files_sftp",
+    "sanitize_path_segment",
+    "infer_sftp_child_path",
+    "UploadJob",
+    "Uploader",
+    "HttpUploader",
+    "SftpUploader",
 ]

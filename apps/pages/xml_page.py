@@ -3,17 +3,20 @@
 import os
 import threading
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 
 from apps.config import (
     APP_DIR, BG_MAIN, BG_CARD, BG_INPUT, FG_TEXT, FG_DIM,
-    ACCENT_BLUE, ACCENT_ORANGE, ACCENT_GREEN, ACCENT_RED,
-    BTN_HOVER_BLUE, BTN_HOVER_ORANGE, BTN_HOVER_GREEN, BTN_HOVER_RED,
+    ACCENT_BLUE, ACCENT_ORANGE, ACCENT_GREEN, ACCENT_RED,ACCENT_PURPLE,
+    BTN_HOVER_BLUE, BTN_HOVER_ORANGE, BTN_HOVER_GREEN, BTN_HOVER_RED,BTN_HOVER_PURPLE,
+    SFTP_BUFFER_PATH,
 )
 from apps.widgets import (
     StyledButton, StatusBar, make_header, make_section,
     ScrollableFrame, show_info, show_warning, show_error,
+    get_sftp_uploader, run_upload_batch,
 )
+from apps.services.upload_api import UploadJob
 from apps.processing.xml_to_excel import run_xml_to_excel
 from apps.services import study_mapping
 
@@ -35,6 +38,7 @@ class XMLToExcelPage(tk.Frame):
         self.controller = controller
         self.xml_files = []
         self.mapping_path = None
+        self._last_output_files = []
 
         make_header(self, controller, "Xử lý XML → Excel")
 
@@ -115,6 +119,11 @@ class XMLToExcelPage(tk.Frame):
                                     bg_color=ACCENT_GREEN, hover_color=BTN_HOVER_GREEN, font_size=15)
         self.run_btn.pack()
 
+        self.upload_btn = StyledButton(run_frame, text="▲  UPLOAD", command=self._upload_sftp,
+                                       bg_color=ACCENT_PURPLE, hover_color=BTN_HOVER_PURPLE, font_size=13)
+        self.upload_btn.pack(pady=(10, 0))
+        self.upload_btn.set_state("disabled")
+
         # === Status ===
         self.status = StatusBar(body)
         self.status.pack(fill="x", padx=25, pady=(0, 10))
@@ -180,10 +189,11 @@ class XMLToExcelPage(tk.Frame):
             return
 
         self.run_btn.set_state("disabled")
+        self.upload_btn.set_state("disabled")
         self.status.set("Đang xử lý...", "working")
 
         def on_done(success, msg):
-            self.controller.after(0, lambda: self._finish(success, msg))
+            self.controller.after(0, lambda: self._finish(success, msg, output))
 
         threading.Thread(
             target=run_xml_to_excel,
@@ -191,11 +201,31 @@ class XMLToExcelPage(tk.Frame):
             daemon=True,
         ).start()
 
-    def _finish(self, success, msg):
+    def _finish(self, success, msg, output_path):
         self.run_btn.set_state("normal")
         if success:
+            self._last_output_files = [output_path]
+            self.upload_btn.set_state("normal")
             self.status.set(msg, "success")
             show_info(self, "Thành công", msg)
         else:
             self.status.set(msg, "error")
             show_error(self, "Lỗi", msg)
+
+    def _upload_sftp(self):
+        if not self._last_output_files:
+            show_info(self, "Không có file", "Chưa có file Excel đã xử lý để upload.")
+            return
+        if not SFTP_BUFFER_PATH:
+            show_warning(self, "Thiếu cấu hình", "Chưa cấu hình SFTP_BUFFER_PATH trong .env.")
+            return
+        if not messagebox.askyesno(
+            "Upload", "Upload file Excel đã xử lý lên không gian lưu trữ?"
+        ):
+            return
+
+        run_upload_batch(
+            self, self.upload_btn, self.status,
+            get_sftp_uploader(self, SFTP_BUFFER_PATH),
+            [UploadJob(label="xml", files=self._last_output_files)],
+        )

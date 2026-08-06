@@ -4,11 +4,13 @@ import platform
 import tkinter as tk
 
 from apps.config import APP_DIR, BG_MAIN
+from apps.services.sftp_session import SftpSessionManager
 from apps.pages.home import HomePage
 from apps.pages.xml_page import XMLToExcelPage
 from apps.pages.xray_page import XRayPage
 from apps.pages.ocr import OCRPage
 from apps.pages.upload import UploadPDFPage
+from apps.pages.multi_upload_page import MultiUploadPage
 
 
 class App(tk.Tk):
@@ -30,7 +32,7 @@ class App(tk.Tk):
         self.container.pack(fill="both", expand=True)
 
         self.frames = {}
-        for PageClass in (HomePage, XMLToExcelPage, XRayPage, OCRPage, UploadPDFPage):
+        for PageClass in (HomePage, XMLToExcelPage, XRayPage, OCRPage, UploadPDFPage, MultiUploadPage):
             frame = PageClass(self.container, self)
             self.frames[PageClass] = frame
             frame.place(relwidth=1, relheight=1)
@@ -50,6 +52,10 @@ class App(tk.Tk):
                     on_close()
                 except Exception:
                     pass
+        try:
+            SftpSessionManager.instance().close()
+        except Exception:
+            pass
         self.destroy()
 
     def _apply_app_icon(self):
