@@ -53,13 +53,7 @@ def write_csv(
 ) -> None:
     rows = list(rows)
     if not fieldnames:
-        collected: List[str] = []
-        seen = set()
-        for row in rows:
-            for key in row.keys():
-                if key not in seen:
-                    seen.add(key)
-                    collected.append(key)
+        collected = list(dict.fromkeys(key for row in rows for key in row))
         fieldnames = collected or [
             "record_type",
             "study_id",

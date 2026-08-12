@@ -56,7 +56,5 @@ paramiko==5.0.0
 python-dotenv==1.2.2
 requests==2.34.2
 
-# --- Multi upload filename parser (apps/services/parser/file_name.py) ---
-regex==2024.11.6
-dateparser==1.2.1
-pytz==2025.1
+# Multi upload filename parser (apps/services/parser/file_name.py) dùng
+# thẳng `re`/`datetime` stdlib, không cần regex/dateparser/pytz nữa.

@@ -59,6 +59,7 @@ from apps.services.upload_api import make_session, upload_pair
 from apps.widgets import (
     DatePicker,
     ScrollableFrame,
+    make_scrollable_listbox,
     StatusBar,
     StyledButton,
     make_header,
@@ -260,14 +261,9 @@ class UploadPDFPage(tk.Frame):
         )
         self.file_count_lbl.pack(padx=10, anchor="w")
 
-        list_frame1 = tk.Frame(top, bg=BG_CARD)
-        list_frame1.pack(fill="both", expand=True, padx=5, pady=5)
-
-        sb1 = tk.Scrollbar(list_frame1)
-        sb1.pack(side="right", fill="y")
-
-        self.file_listbox = tk.Listbox(
-            list_frame1,
+        list_frame1, self.file_listbox = make_scrollable_listbox(
+            top,
+            frame_bg=BG_CARD,
             font=("Helvetica", 10),
             bg=BG_INPUT,
             fg=FG_TEXT,
@@ -275,10 +271,8 @@ class UploadPDFPage(tk.Frame):
             selectforeground="#ffffff",
             borderwidth=0,
             highlightthickness=0,
-            yscrollcommand=sb1.set,
         )
-        self.file_listbox.pack(fill="both", expand=True)
-        sb1.config(command=self.file_listbox.yview)
+        list_frame1.pack(fill="both", expand=True, padx=5, pady=5)
         self.file_listbox.bind("<<ListboxSelect>>", self._on_file_selected)
 
         tk.Frame(left, bg=BORDER_COLOR, height=2).pack(fill="x", padx=5, pady=5)
@@ -343,14 +337,9 @@ class UploadPDFPage(tk.Frame):
         )
         self.checked_count_lbl.pack(side="right", padx=10)
 
-        list_frame2 = tk.Frame(bottom, bg=BG_CARD)
-        list_frame2.pack(fill="both", expand=True, padx=5, pady=5)
-
-        sb2 = tk.Scrollbar(list_frame2)
-        sb2.pack(side="right", fill="y")
-
-        self.pending_listbox = tk.Listbox(
-            list_frame2,
+        list_frame2, self.pending_listbox = make_scrollable_listbox(
+            bottom,
+            frame_bg=BG_CARD,
             font=("Helvetica", 10),
             bg=BG_INPUT,
             fg=FG_TEXT,
@@ -358,10 +347,8 @@ class UploadPDFPage(tk.Frame):
             selectforeground="#ffffff",
             borderwidth=0,
             highlightthickness=0,
-            yscrollcommand=sb2.set,
         )
-        self.pending_listbox.pack(fill="both", expand=True)
-        sb2.config(command=self.pending_listbox.yview)
+        list_frame2.pack(fill="both", expand=True, padx=5, pady=5)
         # Bắt click trước class-binding để phân biệt: click ô ☑ = tick chọn
         # upload, click phần tên = xem/sửa cặp.
         self.pending_listbox.bind("<Button-1>", self._on_pending_click)
@@ -1817,6 +1804,9 @@ class UploadPDFPage(tk.Frame):
         def work():
             # Một session dùng chung cho cả lô: tái dùng kết nối TCP/TLS thay vì
             # bắt tay lại cho từng file.
+            log.info(
+                "=== Bắt đầu lô upload: %d cặp, owner=%s ===", total, owner_email
+            )
             session = make_session()
             results: list[dict] = []
             try:
@@ -1997,6 +1987,12 @@ class UploadPDFPage(tk.Frame):
         n_fail = len(results) - n_ok
         n_skipped = max(0, total_planned - len(results))
         prefix = "Demo: " if demo else ""
+
+        log.info(
+            "=== Kết thúc lô upload: %d/%d cặp OK, %d lỗi, %d chưa thử%s ===",
+            n_ok, total_planned, n_fail, n_skipped,
+            f", lỗi lô: {error}" if error else "",
+        )
 
         if error:
             self.status.set(f"{prefix}Lỗi upload: {error}", "error")
@@ -2193,16 +2189,34 @@ class UploadPDFPage(tk.Frame):
                 "info" if not n_failed else "warning",
             )
 
-    def on_close(self) -> None:
-        """Dọn tài nguyên khi đóng app (được App gọi qua WM_DELETE_WINDOW)."""
+    def on_close(self):
+        """Dọn tài nguyên khi đóng app (được App gọi qua WM_DELETE_WINDOW).
+
+        Trả False để HỦY việc đóng app: dùng khi lô upload đang chạy và người
+        dùng chọn không đóng — tránh gửi dở một file (server có thể đã nhận
+        nhưng app đóng trước khi ghi lại cờ "đã gửi", gây upload trùng ở lần
+        sau) và tránh kẹt cặp nửa pending nửa uploaded (xem comment dưới).
+        """
+
+        uploading = self._cancel_event is not None and not self._cancel_event.is_set()
+        if uploading:
+            if not messagebox.askyesno(
+                "Đang upload",
+                "Lô upload đang chạy. Đóng app bây giờ có thể để lại file "
+                "upload dở (server đã nhận nhưng app chưa kịp ghi lại) và cần "
+                "kiểm tra lại khi mở lại app.\n\nVẫn đóng?",
+            ):
+                return False
+            self._cancel_event.set()
 
         # Dừng lô upload rồi CHỜ thread kết thúc. Thread daemon bị giết giữa lúc
         # move_pair có thể để một cặp kẹt nửa pending nửa uploaded, và cặp đó sẽ
         # biến mất khỏi cả hai tab ở lần mở sau.
-        if self._cancel_event is not None:
-            self._cancel_event.set()
         worker = self._worker
         if worker is not None and worker.is_alive():
+            if uploading:
+                self.status.set("Đang dừng upload để đóng app...", "working")
+                self.update_idletasks()
             worker.join(timeout=SHUTDOWN_JOIN_TIMEOUT)
             if worker.is_alive():
                 log.warning(
@@ -2216,6 +2230,7 @@ class UploadPDFPage(tk.Frame):
             except Exception:
                 pass
             self.current_pdf = None
+        return True
 
 
 __all__ = ["UploadPDFPage"]

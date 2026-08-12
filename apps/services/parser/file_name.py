@@ -1,11 +1,8 @@
 import os
-import regex as re
-import dateparser
-from datetime import datetime
+import re
+from datetime import datetime, timedelta, timezone
 
-from pytz import utc, FixedOffset, timezone
-offset_minutes = 7 * 60
-tz = FixedOffset(offset_minutes)
+tz = timezone(timedelta(hours=7))
 
 STUDIES = ['24EIb', '24EIc','39EIa','01NVb','01NVc']+\
 	['05EI_Covid19', '05EI_MPox', '05EI_Flu'] +\
@@ -33,7 +30,6 @@ class FileNameParser:
 	"""This class support parsing (like Folder in research_convention) for local files in INNOVATION/DataUploader"""
 
 	def __init__(self, file) -> None:
-		# print('FileNameParser', file)
 		self.file = file
 
 	def parse(self):
@@ -47,17 +43,12 @@ class FileNameParser:
 		duration=(end - start).total_seconds() if end and start else None
 		size = self.get_size()
 		date = self.get_date()
-		# print("Parsed date:", date)
 		parsed_info = {
 			"study": study,
 			"patient": patient,
 			"datatype": datatype,
 			"start": start.isoformat() if start else None,
 			"end": end.isoformat() if end else None,
-			# "date": (
-			# 	start.replace(hour=0, minute=0,
-			# 				  second=0).isoformat() if start else None
-			# ),
 			"date": date.isoformat() if date else None,
 			"device": device,
 			"duration": duration,
@@ -65,9 +56,6 @@ class FileNameParser:
 			"size": size,
 			"path": self.file
 		}
-		# print('parsed_info', parsed_info)
-		# if datatype == "Monitor":
-		# 	parsed_info["filename"] = self.rename_file(parsed_info)
 		return parsed_info
 
 	def get_study(self):
@@ -113,8 +101,6 @@ class FileNameParser:
 			return "Gyro"
 		if re.search("Nonin", self.file):
 			return "PPG"
-		# if re.search("28EI", file):
-		# 	return "Ultrasound"
 		if re.search("39EIa", self.file) and re.search("ULT", self.file):
 			return "Ultrasound"
 		if re.search("01NVb", self.file):
@@ -146,8 +132,8 @@ class FileNameParser:
 		if file.find('Annotation')!=-1 or file.find('Log_')!=-1:
 			matches = re.findall("\d{4}-\d{2}-\d{2}", file)
 			if len(matches) > 0:
-				return dateparser.parse(
-					matches[0], date_formats=["%Y-%m-%d"]
+				return datetime.strptime(
+					matches[0], "%Y-%m-%d"
 				).replace(tzinfo=tz)
 
 		if datatype in ["ECG","sECG"]:
@@ -161,26 +147,26 @@ class FileNameParser:
 				matches = re.findall(p, file)
 				if len(matches) > 0:
 					try:
-						return dateparser.parse(
-							matches[0], date_formats=[fmt]
+						return datetime.strptime(
+							matches[0], fmt
 						).replace(tzinfo=tz)
 					except Exception as e:
-						print('no date',file, 'due to', e)			
+						print('no date',file, 'due to', e)
 		if datatype == "Gyro":
 			return None
 		if datatype == "PPG":
 			for idx, p in enumerate(PATTERN):
 				matches = re.findall(p, file)
 				if len(matches) > 0:
-					return dateparser.parse(
-						matches[0], date_formats=[FORMAT[idx]]
+					return datetime.strptime(
+						matches[0], FORMAT[idx]
 					).replace(tzinfo=tz)
 		if file.find('28EI')!=-1:
 			matches = re.findall("[0-3]\d[0-1]\d20[1-2]\d", file)
 			if len(matches) > 0:
 				try:
-					return dateparser.parse(
-						matches[0], date_formats=["%d%m%Y"]
+					return datetime.strptime(
+						matches[0], "%d%m%Y"
 					).replace(tzinfo=tz)
 				except Exception as e:
 					print('no date',file, 'due to', e)
@@ -190,18 +176,17 @@ class FileNameParser:
 			matches = re.findall("[0-1]\d[0-3]\d20[1-2]\d", file)
 			if len(matches) > 0:
 				try:
-					return dateparser.parse(
-						matches[0], date_formats=["%Y%m%d"]
+					return datetime.strptime(
+						matches[0], "%Y%m%d"
 					).replace(tzinfo=tz)
 				except Exception as e:
 					print('no date',file, 'due to', e)
-			# return None
 		if datatype == "X-ray":
 			matches = re.findall("([0-3]\d[01]\d20\d{2})", file)
 			if len(matches) > 0:
 				try:
-					return dateparser.parse(
-						matches[0], date_formats=["%d%m%Y"]
+					return datetime.strptime(
+						matches[0], "%d%m%Y"
 					).replace(tzinfo=tz)
 				except Exception as e:
 					print('no date',file, 'due to', e)
@@ -215,10 +200,9 @@ class FileNameParser:
 		for p, fmt in patterns:
 			matches = re.findall(p, file)
 			if len(matches) > 0:
-				try:	
-					# print('date',matches[0], 'aa', dateparser.parse(matches[0], date_formats=date_formats))
-					return dateparser.parse(
-							matches[0], date_formats=[fmt]
+				try:
+					return datetime.strptime(
+							matches[0], fmt
 						).replace(tzinfo=tz)
 				except Exception as e:
 					print('no date',file, 'due to', e)
@@ -257,8 +241,8 @@ class FileNameParser:
 		if datatype == "ECG":
 			matches = re.findall("\d{4}-\d{2}-\d{2}_\d{2}.\d{2}.\d{2}", file)
 			if len(matches) > 1:
-				return dateparser.parse(
-					matches[1], date_formats=["%Y-%m-%d_%H.%M.%S"]
+				return datetime.strptime(
+					matches[1], "%Y-%m-%d_%H.%M.%S"
 				).replace(tzinfo=tz)
 		if datatype == "sECG":
 			return None
@@ -266,8 +250,8 @@ class FileNameParser:
 		matches = re.findall("[0-3]\d.[0-1]\d.20[1-2]\d.[0-2]\d.[0-5]\d.[0-5]\d", file)
 		if len(matches) > 1:
 			try:
-				return dateparser.parse(
-					matches[1], date_formats=["%d.%m.%Y.%H.%M.%S"]
+				return datetime.strptime(
+					matches[1], "%d.%m.%Y.%H.%M.%S"
 				).replace(tzinfo=tz)
 			except Exception as e:
 				print('no date',file, 'due to', e)
@@ -327,21 +311,9 @@ class FileNameParser:
 	def get_filename(self, datatype):
 		file = self.file
 		if datatype == "Ultrasound":
-			# if file.find('39EI')!=-1: 
-			# 	return 'HEART/'+file.split("/")[-1]
-			# TODO other files
 			return file.split("/")[-1]
-			# if file.split('/')[-1].find('.')!=-1:
-			# 	return file.split("/")[-1]
-			
-			# return "/".join(file.split("/")[-2:])
 		if datatype in ["ECG", "sECG","PPG"]:
 			return file.split("/")[-1]
-		# if datatype == "Monitor":
-		# 	idx = re.findall(r'file\s*(\d)',file.lower())
-		# 	if len(idx)>0:
-		# 		return f"FILE{idx[0]}/{file.split('/')[-1]}"
-		# 	return "FILE1/"+file.split("/")[-1]
 		return file.split("/")[-1]
 	def get_size(self):
 		file = self.file

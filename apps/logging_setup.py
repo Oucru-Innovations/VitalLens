@@ -10,6 +10,8 @@ import logging
 import os
 import sys
 import warnings
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 
 _NOISY_LOGGERS = (
@@ -18,6 +20,37 @@ _NOISY_LOGGERS = (
     "paddlex",
     "ppocr",
 )
+
+# App chạy với console=False (build_exe.spec) nên log ra stderr không ai thấy.
+# File log là cách DUY NHẤT để xem lại "đã upload file nào, lúc nào, kết quả
+# ra sao" sau khi sự cố — upload_api.py đã log rất chi tiết, chỉ thiếu nơi lưu.
+_LOG_FILENAME = "vitallens.log"
+_LOG_MAX_BYTES = 5 * 1024 * 1024
+_LOG_BACKUP_COUNT = 3
+
+
+def _resolve_log_dir() -> Path:
+    """Thư mục ghi log: %LOCALAPPDATA%\\VitalLens khi đóng gói, thư mục gốc
+    repo khi chạy từ source.
+
+    KHÔNG dùng thư mục cạnh EXE (``dist\\VitalLens\\``, nơi ``apps.config``
+    trỏ tới) — đó là thư mục bị zip nguyên vẹn và gửi cho end-user (xem README
+    "Ship to End Users"). Log có thể mang patient_code (nhúng trong tên file
+    PDF/CSV, xem `apps.pages.upload.page`) nên phải nằm ngoài mọi thứ có thể
+    lọt vào bản release; `build.bat` cũng chỉ quét `.env`/`env`/
+    `config_debug.log`, không quét `logs/`. %LOCALAPPDATA% là thư mục riêng
+    của từng máy, không bao giờ nằm trong `dist\\`.
+
+    Lặp lại một phần logic của ``apps.config._resolve_app_dir`` tại chỗ (thay
+    vì import) để module này không phụ thuộc ``apps.config`` — thứ tự import
+    ở main.py là load-bearing (patch SSL/env Paddle phải chạy trước khi import
+    bất kỳ gì).
+    """
+
+    if getattr(sys, "frozen", False):
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home())
+        return base / "VitalLens" / "logs"
+    return Path(__file__).resolve().parent.parent / "logs"
 
 
 def setup_logging(level: int | str = logging.INFO) -> None:
@@ -43,11 +76,23 @@ def setup_logging(level: int | str = logging.INFO) -> None:
         "ignore", message=".*doesn't match a supported version"
     )
 
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        stream=sys.stderr,
-    )
+    fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
+    try:
+        log_dir = _resolve_log_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            log_dir / _LOG_FILENAME,
+            maxBytes=_LOG_MAX_BYTES,
+            backupCount=_LOG_BACKUP_COUNT,
+            encoding="utf-8",
+        )
+        handlers.append(file_handler)
+    except OSError:
+        # Thư mục không ghi được (quyền, ổ đầy...) → vẫn chạy tiếp với stderr.
+        pass
+
+    logging.basicConfig(level=level, format=fmt, handlers=handlers)
 
     for name in _NOISY_LOGGERS:
         logging.getLogger(name).setLevel(logging.ERROR)

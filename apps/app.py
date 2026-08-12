@@ -44,12 +44,24 @@ class App(tk.Tk):
         self.frames[page_class].tkraise()
 
     def _on_close(self):
-        # Cho các trang cơ hội dọn tài nguyên (đóng PDF handle, ...).
+        # Cho các trang cơ hội dọn tài nguyên (đóng PDF handle, ...). Trang nào
+        # trả về False (vd: đang upload dở, người dùng chọn không đóng) thì
+        # hủy việc đóng app ngay, không dọn SFTP/destroy nữa.
+        #
+        # ponytail: vòng lặp này KHÔNG hoàn tác việc dọn của các trang đã chạy
+        # trước trang trả về False — an toàn hiện tại vì UploadPDFPage (trang
+        # duy nhất tự định nghĩa on_close(), và cũng là trang duy nhất có thể
+        # trả False) đứng SAU mọi trang khác trong tuple ở __init__. Nếu có
+        # thêm trang thứ hai vừa tự dọn tài nguyên không thể hoàn tác vừa có
+        # thể trả False, và trang đó đứng SAU trang kia trong tuple, cần tách
+        # thành hai vòng: hỏi veto (can_close) của mọi trang trước, rồi mới
+        # dọn (on_close) của mọi trang.
         for frame in self.frames.values():
             on_close = getattr(frame, "on_close", None)
             if callable(on_close):
                 try:
-                    on_close()
+                    if on_close() is False:
+                        return
                 except Exception:
                     pass
         try:

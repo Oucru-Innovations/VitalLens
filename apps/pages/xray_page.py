@@ -13,7 +13,7 @@ from apps.config import (
 )
 from apps.widgets import (
     StyledButton, StatusBar, make_header, make_section,
-    ScrollableFrame, show_info, show_warning, show_error,
+    ScrollableFrame, make_scrollable_listbox, show_info, show_warning, show_error,
     get_sftp_uploader, run_upload_batch,
 )
 from apps.services.upload_api import UploadJob
@@ -51,10 +51,12 @@ class XRayPage(tk.Frame):
                                        bg=BG_CARD, fg=FG_DIM)
         self.file_count_lbl.pack(side="left", padx=10)
 
-        self.file_listbox = tk.Listbox(s1, height=4, font=("Courier", 11),
-                                       bg=BG_INPUT, fg=FG_TEXT, selectbackground=ACCENT_BLUE,
-                                       borderwidth=0, highlightthickness=0)
-        self.file_listbox.pack(fill="x", padx=15, pady=(5, 12))
+        list_frame, self.file_listbox = make_scrollable_listbox(
+            s1, frame_bg=BG_CARD, height=4, font=("Courier", 11),
+            bg=BG_INPUT, fg=FG_TEXT, selectbackground=ACCENT_BLUE,
+            borderwidth=0, highlightthickness=0,
+        )
+        list_frame.pack(fill="x", padx=15, pady=(5, 12))
 
         # === Section 2: Output ===
         s2 = make_section(body, "BƯỚC 2 — Chọn thư mục lưu file đầu ra (DICOM anonymized)")

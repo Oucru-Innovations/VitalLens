@@ -11,7 +11,7 @@ from .buttons import StyledButton
 from .status import StatusBar
 from .header import make_header, make_section
 from .date_picker import DatePicker
-from .scrollable import ScrollableFrame
+from .scrollable import ScrollableFrame, make_scrollable_listbox
 from .dialogs import show_message, show_report, show_info, show_warning, show_error
 from .sftp import ensure_sftp_backend, get_sftp_uploader
 from .upload_batch import run_upload_batch
@@ -23,6 +23,7 @@ __all__ = [
     "make_section",
     "DatePicker",
     "ScrollableFrame",
+    "make_scrollable_listbox",
     "show_message",
     "show_report",
     "show_info",

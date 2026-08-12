@@ -181,23 +181,11 @@ class SftpBackend:
 # ---------------------------------------------------------------------------
 
 
-def local_backend() -> LocalBackend:
-    return LocalBackend()
-
-
-def sftp_backend_from_transport(sftp, transport=None) -> SftpBackend:
-    return SftpBackend(sftp, transport)
-
-
 def safe_is_dir(backend: StorageBackend, path: str) -> bool:
     try:
         return backend.is_dir(path)
     except Exception:
         return False
-
-
-def get_name(backend: StorageBackend, path: str) -> str:
-    return backend.basename(path)
 
 
 def resolve_named_child_dir(
@@ -276,10 +264,7 @@ __all__ = [
     "StorageBackend",
     "LocalBackend",
     "SftpBackend",
-    "local_backend",
-    "sftp_backend_from_transport",
     "safe_is_dir",
-    "get_name",
     "resolve_named_child_dir",
     "resolve_existing_data_dir",
     "ensure_remote_dir",

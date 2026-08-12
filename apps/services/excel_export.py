@@ -45,14 +45,7 @@ def append_row_as_text(ws, values: Iterable) -> None:
 
 
 def collect_columns(rows: Iterable[dict]) -> List[str]:
-    columns: List[str] = []
-    seen = set()
-    for row in rows:
-        for key in row.keys():
-            if key not in seen:
-                seen.add(key)
-                columns.append(key)
-    return columns
+    return list(dict.fromkeys(key for row in rows for key in row))
 
 
 def write_rows_to_xlsx(

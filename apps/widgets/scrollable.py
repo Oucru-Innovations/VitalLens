@@ -5,6 +5,24 @@ from __future__ import annotations
 import tkinter as tk
 
 
+def make_scrollable_listbox(
+    parent: tk.Widget, frame_bg=None, **listbox_kwargs
+) -> tuple[tk.Frame, tk.Listbox]:
+    """Listbox + Scrollbar dọc đã nối dây sẵn, đặt trong 1 Frame.
+
+    Trả ``(frame, listbox)`` — gọi ``frame.pack(...)`` theo ý muốn ở nơi gọi;
+    hàm này không tự pack frame (mỗi nơi gọi cần fill/padx/pady khác nhau).
+    """
+
+    frame = tk.Frame(parent, bg=frame_bg)
+    sb = tk.Scrollbar(frame)
+    sb.pack(side="right", fill="y")
+    listbox = tk.Listbox(frame, yscrollcommand=sb.set, **listbox_kwargs)
+    listbox.pack(side="left", fill="both", expand=True)
+    sb.config(command=listbox.yview)
+    return frame, listbox
+
+
 class ScrollableFrame(tk.Frame):
     """Frame có thanh cuộn dọc. Nội dung thực tế đặt vào ``self.interior``."""
 
@@ -51,4 +69,4 @@ class ScrollableFrame(tk.Frame):
             self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
 
-__all__ = ["ScrollableFrame"]
+__all__ = ["ScrollableFrame", "make_scrollable_listbox"]

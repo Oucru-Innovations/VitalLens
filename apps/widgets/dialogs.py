@@ -115,12 +115,17 @@ def show_message(parent: tk.Widget, title: str, message: str, kind: str = "info"
     win, content = _dialog_shell(parent, title, kind)
 
     line_count = message.count("\n") + 1
+    scroll = tk.Scrollbar(content)
+    scroll.pack(side="right", fill="y")
+
     text = tk.Text(content, wrap="word", font=("Helvetica", 11), bg=BG_INPUT, fg=FG_TEXT,
                    borderwidth=0, highlightthickness=1, highlightbackground=BORDER_COLOR,
-                   height=min(14, max(3, line_count + 1)), padx=10, pady=10)
+                   height=min(14, max(3, line_count + 1)), padx=10, pady=10,
+                   yscrollcommand=scroll.set)
     text.insert("1.0", message)
     text.configure(state="disabled")
-    text.pack(fill="both", expand=True)
+    text.pack(side="left", fill="both", expand=True)
+    scroll.config(command=text.yview)
 
     _finish_dialog(win, message)
 

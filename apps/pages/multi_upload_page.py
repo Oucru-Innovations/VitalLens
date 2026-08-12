@@ -42,7 +42,7 @@ from apps.services.upload_api import (
 )
 from apps.widgets import (
     StyledButton, StatusBar, make_header, make_section,
-    get_sftp_uploader, run_upload_batch,
+    make_scrollable_listbox, get_sftp_uploader, run_upload_batch,
 )
 
 log = logging.getLogger(__name__)
@@ -176,11 +176,11 @@ class MultiUploadPage(tk.Frame):
 
         # === Section 4: Đã upload ===
         s4 = make_section(body, "Đã upload hoàn thành")
-        self.uploaded_listbox = tk.Listbox(
-            s4, height=5, font=("Courier", 10),
+        uploaded_frame, self.uploaded_listbox = make_scrollable_listbox(
+            s4, frame_bg=BG_CARD, height=5, font=("Courier", 10),
             bg=BG_INPUT, fg=FG_DIM, borderwidth=0, highlightthickness=0,
         )
-        self.uploaded_listbox.pack(fill="x", padx=15, pady=(0, 12))
+        uploaded_frame.pack(fill="x", padx=15, pady=(0, 12))
 
         # === Status ===
         self.status = StatusBar(body)

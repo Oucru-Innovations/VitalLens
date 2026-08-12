@@ -45,6 +45,7 @@ from apps.widgets import (
     make_header,
     make_section,
     ScrollableFrame,
+    make_scrollable_listbox,
     show_info,
     show_warning,
 )
@@ -406,14 +407,9 @@ class OCRPage(tk.Frame):
                 "<<ComboboxSelected>>", self._on_lab_type_changed
             )
 
-        list_frame = tk.Frame(left, bg=BG_CARD)
-        list_frame.pack(fill="both", expand=True, padx=5, pady=(0, 5))
-
-        sb = tk.Scrollbar(list_frame)
-        sb.pack(side="right", fill="y")
-
-        self.folder_listbox = tk.Listbox(
-            list_frame,
+        list_frame, self.folder_listbox = make_scrollable_listbox(
+            left,
+            frame_bg=BG_CARD,
             font=("Helvetica", 11),
             bg=BG_INPUT,
             fg=FG_TEXT,
@@ -421,10 +417,8 @@ class OCRPage(tk.Frame):
             selectforeground="#ffffff",
             borderwidth=0,
             highlightthickness=0,
-            yscrollcommand=sb.set,
         )
-        self.folder_listbox.pack(fill="both", expand=True)
-        sb.config(command=self.folder_listbox.yview)
+        list_frame.pack(fill="both", expand=True, padx=5, pady=(0, 5))
         self.folder_listbox.bind("<<ListboxSelect>>", self._on_folder_selected)
 
         export_text = "Export theo loại" if self._is_validate_mode() else "Export Excel"
