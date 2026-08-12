@@ -16,6 +16,10 @@ KHÔNG thử lại ``ReadTimeout`` (đã gửi xong, đang chờ phản hồi �
 ghi bản ghi rồi) và KHÔNG thử lại 500 (app đã chạy và có thể đã ghi dở). Những
 trường hợp đó trả ``retryable=True`` để người dùng tự quyết định bấm Upload lại.
 
+Vì ``ReadTimeout`` rơi vào nhóm phải hỏi người dùng, timeout chờ phản hồi để
+rộng (``DEFAULT_READ_TIMEOUT``) còn timeout kết nối để chặt
+(``DEFAULT_CONNECT_TIMEOUT``) — xem chú thích tại chỗ khai báo.
+
 Gửi cả lô: tạo một ``Session`` bằng `make_session()` rồi truyền vào từng lời
 gọi để tái dùng kết nối TCP/TLS thay vì bắt tay lại cho mỗi file. Truyền
 ``cancel_event`` để dừng lô giữa chừng khi người dùng bấm Hủy hoặc đóng app.
@@ -51,6 +55,23 @@ DEFAULT_MAX_RETRIES = 2
 DEFAULT_BACKOFF = 1.5
 # Chặn trên cho Retry-After để server lỗi cấu hình không treo app hàng giờ.
 MAX_RETRY_AFTER = 30.0
+
+# Timeout tách làm HAI pha (requests nhận tuple ``(connect, read)``):
+#
+# - connect: chỉ là bắt tay TCP/TLS, vài giây là đủ. Để số lớn ở đây rất hại —
+#   lỗi pha kết nối được TỰ ĐỘNG thử lại (xem `_is_safe_to_retry`), nên server
+#   không truy cập được sẽ treo ``connect × (1 + max_retries)`` trước khi người
+#   dùng thấy báo lỗi.
+# - read: thời gian chờ GIỮA hai lần nhận byte sau khi đã gửi xong, KHÔNG phải
+#   tổng thời gian request. File lớn upload chậm nhưng đều đặn sẽ không bị cắt;
+#   con số này chỉ cần đủ cho lúc backend im lặng vì đang xử lý file.
+#
+# Read để rộng tay vì ``ReadTimeout`` KHÔNG được tự thử lại (endpoint không có
+# idempotency key) — mỗi lần chạm timeout là một lần người dùng phải tự kiểm tra
+# xem server đã nhận hay chưa.
+DEFAULT_CONNECT_TIMEOUT = 15.0
+DEFAULT_READ_TIMEOUT = 300.0
+DEFAULT_TIMEOUT = (DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT)
 
 
 class UploadCancelled(Exception):
@@ -101,6 +122,14 @@ def make_session() -> Any:
     except ImportError:
         return None
     return requests.Session()
+
+
+def _format_timeout(timeout: float | tuple[float, float]) -> str:
+    """Mô tả timeout cho log (chấp nhận cả dạng số lẫn tuple connect/read)."""
+
+    if isinstance(timeout, tuple):
+        return f"connect={timeout[0]:.1f}s, read={timeout[1]:.1f}s"
+    return f"{timeout:.1f}s"
 
 
 def _is_safe_to_retry(exc: BaseException) -> bool:
@@ -168,7 +197,7 @@ def _send_one(
     fpath: str,
     mime: str,
     owner: str,
-    timeout: float,
+    timeout: float | tuple[float, float],
     max_retries: int,
     backoff: float,
     cancel: Optional[threading.Event] = None,
@@ -254,7 +283,7 @@ def upload_pair(
     pdf_path: str,
     csv_path: str,
     owner: str = "",
-    timeout: float = 60.0,
+    timeout: float | tuple[float, float] = DEFAULT_TIMEOUT,
     send_pdf: bool = True,
     send_csv: bool = True,
     session: Any = None,
@@ -275,7 +304,7 @@ def upload_pair(
     log.info("  PDF file  : %s (gửi=%s)", pdf_path, send_pdf)
     log.info("  CSV file  : %s (gửi=%s)", csv_path, send_csv)
     log.info("  Owner     : %s", owner or "(không có)")
-    log.info("  Timeout   : %.1fs", timeout)
+    log.info("  Timeout   : %s", _format_timeout(timeout))
 
     # File nào không cần gửi thì coi như đã OK từ trước.
     pdf_ok = not send_pdf
@@ -374,7 +403,7 @@ def upload_files_http(
     bearer_token: Optional[str],
     file_path: str,
     owner: str = "",
-    timeout: float = 60.0,
+    timeout: float | tuple[float, float] = DEFAULT_TIMEOUT,
     max_retries: int = DEFAULT_MAX_RETRIES,
     retry_backoff: float = DEFAULT_BACKOFF,
 ) -> UploadResult:
@@ -505,7 +534,7 @@ class HttpUploader:
         url: str,
         bearer_token: Optional[str],
         owner: str = "",
-        timeout: float = 60.0,
+        timeout: float | tuple[float, float] = DEFAULT_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
         retry_backoff: float = DEFAULT_BACKOFF,
     ) -> None:
@@ -553,6 +582,9 @@ __all__ = [
     "make_session",
     "RETRYABLE_STATUS",
     "USER_RETRYABLE_STATUS",
+    "DEFAULT_CONNECT_TIMEOUT",
+    "DEFAULT_READ_TIMEOUT",
+    "DEFAULT_TIMEOUT",
     "upload_files_http",
     "upload_files_sftp",
     "sanitize_path_segment",
