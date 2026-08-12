@@ -50,11 +50,11 @@ RETRYABLE_STATUS = frozenset({408, 425, 429, 502, 503, 504})
 # 500 = app đã chạy và lỗi; có thể đã ghi dở bản ghi. Đáng thử lại nhưng phải do
 # người dùng chủ động, không tự động.
 USER_RETRYABLE_STATUS = frozenset({500})
-
 DEFAULT_MAX_RETRIES = 2
 DEFAULT_BACKOFF = 1.5
 # Chặn trên cho Retry-After để server lỗi cấu hình không treo app hàng giờ.
 MAX_RETRY_AFTER = 30.0
+HTTP_POST_DELAY = 0.5
 
 # Timeout tách làm HAI pha (requests nhận tuple ``(connect, read)``):
 #
@@ -491,7 +491,11 @@ def upload_files_sftp(
             if on_file_done is not None:
                 on_file_done(local_path)
         except Exception as e:  # noqa: BLE001
-            log.warning("  [FAIL] Lỗi upload %s: %s", name, e)
+            # exception() để giữ traceback: lỗi SFTP thường là I/O hoặc phiên
+            # rớt, không truy được nguyên nhân nếu chỉ log câu message.
+            log.exception(
+                "  [FAIL] Lỗi upload %s -> %s: %s", local_path, remote_path, e
+            )
             return UploadResult(False, None, f"Lỗi upload {name}: {e}")
 
     log.info("  [OK] Upload %d file lên %s", count, remote_dir)
@@ -537,6 +541,7 @@ class HttpUploader:
         timeout: float | tuple[float, float] = DEFAULT_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
         retry_backoff: float = DEFAULT_BACKOFF,
+        post_delay: float = HTTP_POST_DELAY,
     ) -> None:
         self.url = url
         self.bearer_token = bearer_token
@@ -544,6 +549,7 @@ class HttpUploader:
         self.timeout = timeout
         self.max_retries = max_retries
         self.retry_backoff = retry_backoff
+        self.post_delay = post_delay
 
     def upload(
         self, job: UploadJob, on_file_done: Optional[Callable[[str], None]] = None
@@ -554,8 +560,12 @@ class HttpUploader:
             owner=self.owner, timeout=self.timeout,
             max_retries=self.max_retries, retry_backoff=self.retry_backoff,
         )
-        if result.ok and on_file_done is not None:
-            on_file_done(file_path)
+        if result.ok:
+            if on_file_done is not None:
+                on_file_done(file_path)
+            # Chạy trên thread nền của run_upload_batch nên sleep không đứng UI.
+            if self.post_delay > 0:
+                time.sleep(self.post_delay)
         return result
 
 
@@ -582,6 +592,7 @@ __all__ = [
     "make_session",
     "RETRYABLE_STATUS",
     "USER_RETRYABLE_STATUS",
+    "HTTP_POST_DELAY",
     "DEFAULT_CONNECT_TIMEOUT",
     "DEFAULT_READ_TIMEOUT",
     "DEFAULT_TIMEOUT",

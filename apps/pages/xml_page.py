@@ -121,10 +121,10 @@ class XMLToExcelPage(tk.Frame):
                                     bg_color=ACCENT_GREEN, hover_color=BTN_HOVER_GREEN, font_size=15)
         self.run_btn.pack()
 
-        self.upload_btn = StyledButton(run_frame, text="▲  UPLOAD", command=self._upload_sftp,
-                                       bg_color=ACCENT_PURPLE, hover_color=BTN_HOVER_PURPLE, font_size=13)
-        self.upload_btn.pack(pady=(10, 0))
-        self.upload_btn.set_state("disabled")
+        # self.upload_btn = StyledButton(run_frame, text="▲  UPLOAD", command=self._upload_sftp,
+        #                                bg_color=ACCENT_PURPLE, hover_color=BTN_HOVER_PURPLE, font_size=13)
+        # self.upload_btn.pack(pady=(10, 0))
+        # self.upload_btn.set_state("disabled")
 
         # === Status ===
         self.status = StatusBar(body)
