@@ -20,9 +20,9 @@ File này tuỳ chọn và được nhận dạng theo tiêu đề cột, chạy
   (``services/study_mapping.py``): gắn mã nghiên cứu (xuất ra dưới tên cột
   ``MA_NTG``), lọc theo khoảng ngày (bản ghi ngoài khoảng bị LOẠI HẲN, không
   vào sheet nào), và ẩn ``ID``/``MA_LK`` khỏi file xuất ra. Chế độ này còn thêm
-  sheet ``Summary`` tổng hợp theo ``MA_NTG`` và, nếu tên file mapping theo quy
-  ước ``LabRequest_<đuôi>.xlsx``,
-  gợi ý luôn tên file xuất ra ``LabResult_<đuôi>.xlsx``
+  sheet ``Summary``tổng hợp theo ``MA_NTG`` trong file mapping.
+  Mọi ô trống/0 trong sheet này được tô NỀN ĐỎ để rà soát, trừ ``So_Dong_XN_Moi``. Nếu tên file mapping
+  theo quy ước ``LabRequest_<đuôi>.xlsx``, tên file xuất ra ``LabResult_<đuôi>.xlsx`` 
   (``study_mapping.derive_output_filename``, dùng ở ``pages/xml_page.py``).
 - Ngược lại → **mapping tổng quát** (``services/mapping_excel.py``): ô A1 là tên
   trường XML4 dùng để ghép, các cột còn lại được gắn thêm, không lọc gì.
@@ -81,15 +81,24 @@ SHEET_SUMMARY = "Summary"
 
 # Cột cố định của sheet Summary (chỉ có khi chạy chế độ danh sách nghiên cứu).
 SUMMARY_COLUMNS = (
-    "Mapping_TuNgay", "Mapping_DenNgay",
-    "XML_TuNgay", "XML_DenNgay",
-    "So_MaDichVu", "So_Row_HopLe", "So_Row_Unknown",
+    "Theo_Doi_Tu_Ngay", "Theo_Doi_Den_Ngay",
+    "Nhap_Vien_Tu_Ngay", "Nhap_Vien_Den_Ngay",
+    "So_Ma_Dich_Vu", "So_Dong_Hop_Le", "So_Dong_XN_Moi",
 )
+
+# Cột Summary được MIỄN tô đỏ dù giá trị rỗng/0 — 0 dòng "chưa phân loại" là
+# kết quả TỐT (không có gì cần rà soát thêm), tô đỏ ở đây sẽ đánh dấu nhầm mọi
+# nghiên cứu sạch sẽ. Các cột còn lại tô đỏ theo _is_missing_or_zero().
+SUMMARY_NO_ALERT_COLUMNS = frozenset({"So_Dong_XN_Moi"})
+
+# Các dạng chữ "trống"/"không có dữ liệu" hay gặp — coi như thiếu, dù hiện tại
+# không có nơi nào trong code này tự sinh ra chúng (phòng xa dữ liệu tương lai).
+_MISSING_TEXT = frozenset({"", "NA", "N/A"})
 
 # Hai byte đầu của một stream GZIP.
 GZIP_MAGIC = b"\x1f\x8b"
 
-# Trần dung lượng sau khi giải nén 1 payload. Một hồ sơ XML4 thật chỉ vài trăm
+# Trần dung lượng sau khfi giải nén 1 payload. Một hồ sơ XML4 thật chỉ vài trăm
 # KB; vượt xa mức này thì là file hỏng hoặc "gzip bomb" (vài KB base64 nở ra
 # hàng GB). Không chặn thì 8 luồng chạy song song đủ làm app hết RAM.
 MAX_DECOMPRESSED_BYTES = 64 * 1024 * 1024
@@ -449,18 +458,14 @@ def _study_mapping_ranges(study):
     return ranges
 
 
-def _build_summary_rows(included, unclassified, study):
-    """Gộp thống kê theo ``MA_NTG`` cho sheet Summary.
+def _summary_stats(included, unclassified):
+    """Thống kê số lượng thu được của ``MA_NTG`` từ các bản ghi ĐÃ xuất ra sheet.
 
-    So sánh khoảng ngày KHAI BÁO trong file mapping với khoảng ngày THỰC TẾ có
-    trong dữ liệu XML đã xuất — hai khoảng lệch nhau là dấu hiệu người dùng
-    nên xem lại (ví dụ nghiên cứu khai 6 tháng nhưng dữ liệu XML chỉ có 2
-    tháng đầu). Chỉ tính trên bản ghi ĐÃ xuất ra sheet (khớp EMR_ID và, nếu có
-    khoảng ngày, nằm trong khoảng) — bản ghi bị loại ở ``_split_by_study``
-    không góp phần vào đây, cùng logic với việc chúng không vào sheet nào.
+    Chỉ tính trên bản ghi ĐÃ xuất ra sheet (khớp EMR_ID và, nếu có khoảng ngày,
+    nằm trong khoảng) — bản ghi bị loại ở ``_split_by_study`` không góp phần
+    vào đây, cùng logic với việc chúng không vào sheet nào.
     """
 
-    mapping_ranges = _study_mapping_ranges(study)
     stats = {}
     for records, is_valid in ((included, True), (unclassified, False)):
         for rec in records:
@@ -479,20 +484,47 @@ def _build_summary_rows(included, unclassified, study):
             if day is not None:
                 entry["xml_min"] = day if entry["xml_min"] is None else min(entry["xml_min"], day)
                 entry["xml_max"] = day if entry["xml_max"] is None else max(entry["xml_max"], day)
+    return stats
+
+
+def _is_missing_or_zero(value):
+    """Ô Summary có "trống"/"không dữ liệu" cần được xác định để tô đỏ cảnh báo trong Summary.
+    Các giá trị bao gồm: ``None``, ``""``, các cụm "NA" hoặc "MISSING" nếu được khai báo
+    (``_MISSING_TEXT``), và số 0/0.0. 
+    """
+
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip().upper() in _MISSING_TEXT
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return value == 0
+    return False
+
+
+def _build_summary_rows(included, unclassified, study):
+    """Tổng hợp thống kê theo ``MA_NTG`` cho sheet Summary — LEFT JOIN từ phía mapping.
+    Left join mapping và summary. Các mã không thu được dữ liệu cần được thông báo trên màn hình summary.
+    """
+
+    mapping_ranges = _study_mapping_ranges(study)
+    stats = _summary_stats(included, unclassified)
 
     rows = []
-    for study_id in sorted(stats):
-        entry = stats[study_id]
-        map_start, map_end = mapping_ranges.get(study_id, (None, None))
+    for study_id in sorted(mapping_ranges):
+        map_start, map_end = mapping_ranges[study_id]
+        entry = stats.get(study_id)  # None nếu đã lọc bỏ toàn bộ bản ghi
         rows.append({
             STUDY_ID_COLUMN: study_id,
-            "Mapping_TuNgay": _fmt_yyyymmdd(map_start),
-            "Mapping_DenNgay": _fmt_yyyymmdd(map_end),
-            "XML_TuNgay": _fmt_yyyymmdd(entry["xml_min"]),
-            "XML_DenNgay": _fmt_yyyymmdd(entry["xml_max"]),
-            "So_MaDichVu": len(entry["services"]),
-            "So_Row_HopLe": entry["n_valid"],
-            "So_Row_Unknown": entry["n_unknown"],
+            "Theo_Doi_Tu_Ngay": _fmt_yyyymmdd(map_start),
+            "Theo_Doi_Den_Ngay": _fmt_yyyymmdd(map_end),
+            "Nhap_Vien_Tu_Ngay": _fmt_yyyymmdd(entry["xml_min"] if entry else None),
+            "Nhap_Vien_Den_Ngay": _fmt_yyyymmdd(entry["xml_max"] if entry else None),
+            "So_Ma_Dich_Vu": len(entry["services"]) if entry else 0,
+            "So_Dong_Hop_Le": entry["n_valid"] if entry else 0,
+            "So_Dong_XN_Moi": entry["n_unknown"] if entry else 0,
         })
     return rows
 
@@ -634,9 +666,16 @@ def _collect_and_save(xml_files, output_path, mapping_path=None):
         # không phải lội qua các sheet dữ liệu thô trước.
         ws = wb.create_sheet(title=sanitize_sheet_name(SHEET_SUMMARY, default="Sheet"))
         summary_columns = [STUDY_ID_COLUMN] + list(SUMMARY_COLUMNS)
-        append_row_as_text(ws, summary_columns)
+        append_row_as_text(ws, summary_columns)  # tiêu đề: không tô đỏ
         for rec in summary_rows:
-            append_row_as_text(ws, [rec.get(c, "") for c in summary_columns])
+            # Mọi ô trống/NA/0 đều tô đỏ, TRỪ So_Dong_XN_Moi (0 ở đó là tốt).
+            # write_only không cho sửa ô đã ghi nên style phải quyết ngay ở đây.
+            values = [rec.get(c, "") for c in summary_columns]
+            alerts = [
+                c not in SUMMARY_NO_ALERT_COLUMNS and _is_missing_or_zero(v)
+                for c, v in zip(summary_columns, values)
+            ]
+            append_row_as_text(ws, values, alerts=alerts)
 
     for title, records, lead_column, hidden_columns in sheets:
         if not records:
@@ -654,9 +693,9 @@ def _collect_and_save(xml_files, output_path, mapping_path=None):
 
     wb.save(output_path)
     return True, (
-        f"Hoàn thành! {len(included)} bản ghi Include, "
+        f"Hoàn thành! {len(included)} bản ghi được trích xuất, "
         f"{len(unclassified)} chưa có trong danh mục, "
-        f"{n_excluded} bị loại (Exclude).{mapping_note}{warning}"
+        f"{n_excluded} nằm ngoài danh mục và khung thời gian.{mapping_note}{warning}"
     )
 
 
