@@ -74,10 +74,10 @@ class XMLToExcelPage(tk.Frame):
             text=("Dòng 1 là tiêu đề. Chế độ được chọn tự động theo tên cột:\n"
                   "• Có cột USUBJID và EMR_ID → danh sách nghiên cứu: EMR_ID được "
                   "ghép với MA_LK (toàn bộ) hoặc 10 ký tự cuối của ID,\n"
-                  "   kết quả xuất ra cột USUBJID và ẩn ID/MA_LK. Có thêm "
+                  "   kết quả xuất ra cột MA_NTG và ẩn ID/MA_LK. Có thêm "
                   "START_DATE/END_DATE thì lọc NGAY_KQ theo khoảng đó (trọn ngày,\n"
                   "   bản ghi ngoài khoảng bị loại hẳn, không xuất ra sheet nào). "
-                  "Có thêm sheet Summary tổng hợp theo USUBJID.\n"
+                  "Có thêm sheet Summary tổng hợp theo MA_NTG.\n"
                   "• Không có → mapping thường: ô A1 là tên trường XML4 dùng để "
                   "ghép (ví dụ MA_DICH_VU), các cột còn lại được thêm vào.\n"
                   "• File tên dạng LabRequest_<đuôi>.xlsx sẽ tự gợi ý tên file "
@@ -191,7 +191,7 @@ class XMLToExcelPage(tk.Frame):
             return
 
         self.run_btn.set_state("disabled")
-        self.upload_btn.set_state("disabled")
+        # self.upload_btn.set_state("disabled")
         self.status.set("Đang xử lý...", "working")
 
         def on_done(success, msg):
@@ -207,7 +207,7 @@ class XMLToExcelPage(tk.Frame):
         self.run_btn.set_state("normal")
         if success:
             self._last_output_files = [output_path]
-            self.upload_btn.set_state("normal")
+            # self.upload_btn.set_state("normal")
             self.status.set(msg, "success")
             show_info(self, "Thành công", msg)
         else:
@@ -227,7 +227,8 @@ class XMLToExcelPage(tk.Frame):
             return
 
         run_upload_batch(
-            self, self.upload_btn, self.status,
+            # self, self.upload_btn, self.status,
+            self, None, self.status,
             get_sftp_uploader(self, SFTP_BUFFER_PATH),
             [UploadJob(label="xml", files=self._last_output_files)],
         )

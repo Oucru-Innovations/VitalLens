@@ -3,8 +3,8 @@
 Chỉ XML4 được xử lý; các loại hồ sơ khác (XML1/2/3/…) bị bỏ qua hoàn toàn.
 
 Mỗi bản ghi được đối chiếu với danh mục dịch vụ (``database_medical.csv``)
-qua ``MA_DICH_VU`` = ``ID_SERVICE`` để lấy tên phương pháp (``Name_Method``)
-và nhóm lọc:
+qua ``MA_DICH_VU`` = ``ID_SERVICE`` để lấy tên phương pháp (cột ``Name_Method``
+trong danh mục, xuất ra Excel dưới tên ``TEN_DICH_VU``) và nhóm lọc:
 
     Include                   -> sheet chính
     Exclude                   -> loại khỏi kết quả
@@ -17,10 +17,11 @@ Ngoài danh mục cố định đó, người dùng có thể chọn thêm 1 fil
 File này tuỳ chọn và được nhận dạng theo tiêu đề cột, chạy một trong hai chế độ:
 
 - Có đủ cột ``USUBJID`` + ``EMR_ID`` → **danh sách nghiên cứu**
-  (``services/study_mapping.py``): gắn ``USUBJID``, lọc theo khoảng ngày (bản
-  ghi ngoài khoảng bị LOẠI HẲN, không vào sheet nào), và ẩn ``ID``/``MA_LK``
-  khỏi file xuất ra. Chế độ này còn thêm sheet ``Summary`` tổng hợp theo
-  ``USUBJID`` và, nếu tên file mapping theo quy ước ``LabRequest_<đuôi>.xlsx``,
+  (``services/study_mapping.py``): gắn mã nghiên cứu (xuất ra dưới tên cột
+  ``MA_NTG``), lọc theo khoảng ngày (bản ghi ngoài khoảng bị LOẠI HẲN, không
+  vào sheet nào), và ẩn ``ID``/``MA_LK`` khỏi file xuất ra. Chế độ này còn thêm
+  sheet ``Summary`` tổng hợp theo ``MA_NTG`` và, nếu tên file mapping theo quy
+  ước ``LabRequest_<đuôi>.xlsx``,
   gợi ý luôn tên file xuất ra ``LabResult_<đuôi>.xlsx``
   (``study_mapping.derive_output_filename``, dùng ở ``pages/xml_page.py``).
 - Ngược lại → **mapping tổng quát** (``services/mapping_excel.py``): ô A1 là tên
@@ -54,12 +55,13 @@ TARGET_LOAIHOSO = "XML4"
 # XML4: lấy hết các cột, trừ những cột này.
 XML4_EXCLUDED_COLUMNS = {"MA_BS_DOC_KQ"}
 
-# Cột mã dịch vụ trong XML4 và cột tên tra được từ danh mục.
+# Cột mã dịch vụ trong XML4.
 SERVICE_CODE_COLUMN = "MA_DICH_VU"
-NAME_METHOD_COLUMN = medical_catalog.COL_NAME
+# Tên cũ là medical_catalog.COL_NAME, nhưng output sẽ là ``TEN_DICH_VU`` để đồng bộ cách đặt tên
+NAME_METHOD_COLUMN = "TEN_DICH_VU"    # giá trị lấy từ medical_catalog.COL_NAME
 
 # Cột dùng cho danh sách nghiên cứu (BƯỚC 2, chế độ USUBJID/EMR_ID).
-STUDY_ID_COLUMN = study_mapping.COL_STUDY_ID
+STUDY_ID_COLUMN = "MA_NTG"            # giá trị lấy từ study_mapping.COL_STUDY_ID
 LINK_CODE_COLUMN = "MA_LK"          # khớp TOÀN BỘ với EMR_ID
 RESULT_DATE_COLUMN = "NGAY_KQ"      # yyyymmddhhmm — nguồn để lọc theo khoảng ngày
 
@@ -67,7 +69,7 @@ RESULT_DATE_COLUMN = "NGAY_KQ"      # yyyymmddhhmm — nguồn để lọc theo 
 # là tên file XML (process_xml_file ghi đè), ``ID_GOC`` là ID gốc trong hồ sơ.
 STUDY_SUFFIX_FIELDS = ("ID", "ID_GOC")
 
-# Đã có USUBJID thì hai định danh gốc này bị ẩn khỏi file xuất ra (yêu cầu ẩn
+# Đã có MA_NTG thì hai định danh gốc này bị ẩn khỏi file xuất ra (yêu cầu ẩn
 # danh). ID_GOC được GIỮ LẠI có chủ đích — người dùng cần nó để đối chiếu.
 STUDY_HIDDEN_COLUMNS = frozenset({"ID", LINK_CODE_COLUMN})
 
@@ -245,14 +247,14 @@ def process_xml_file(xml_filepath):
 
 
 def _sheet_columns(records, extra_columns=(), lead_column="ID", hidden_columns=()):
-    """Cột của 1 sheet: ``lead_column`` đứng đầu, Name_Method ngay sau MA_DICH_VU.
+    """Cột của 1 sheet: ``lead_column`` đứng đầu, TEN_DICH_VU ngay sau MA_DICH_VU.
 
     ``extra_columns`` (các cột từ file mapping tổng quát) luôn được đưa vào
     cuối, kể cả khi không bản ghi nào khớp — người dùng đã chọn file mapping thì
     phải thấy cột của nó, dù rỗng, mới biết là không khớp được gì.
 
     ``lead_column`` / ``hidden_columns`` khác nhau theo từng sheet: sheet có
-    USUBJID thì ẩn ID và MA_LK, còn sheet "không khớp EMR_ID" phải giữ nguyên
+    MA_NTG thì ẩn ID và MA_LK, còn sheet "không khớp EMR_ID" phải giữ nguyên
     hai cột đó — nó tồn tại để người dùng rà soát, ẩn định danh đi thì rà bằng
     gì.
     """
@@ -280,7 +282,7 @@ def _split_by_catalog(records, catalog):
     Group lạ do ``medical_catalog`` lo một lần lúc nạp file, không lặp lại ở đây.
 
     Lưu ý: hàm SỬA TRỰC TIẾP các dict trong ``records`` (gắn thêm cột
-    ``Name_Method``) thay vì copy — bản ghi có thể tới hàng trăm nghìn dòng,
+    ``TEN_DICH_VU``) thay vì copy — bản ghi có thể tới hàng trăm nghìn dòng,
     nhân đôi lên chỉ để giữ tính "thuần" là không đáng. Bản ghi thuộc nhóm
     Exclude không được gắn gì vì đằng nào cũng bị bỏ.
     """
@@ -349,7 +351,7 @@ def _new_study_stats():
 def _split_by_study(records, study, stats):
     """Chia bản ghi theo danh sách nghiên cứu. Trả ``(khớp, không khớp EMR_ID)``.
 
-    Bản ghi khớp ``EMR_ID`` được gắn ``USUBJID``. Bản ghi KHÔNG khớp EMR_ID rơi
+    Bản ghi khớp ``EMR_ID`` được gắn ``MA_NTG``. Bản ghi KHÔNG khớp EMR_ID rơi
     vào nhóm "không khớp" thứ hai — nhóm này vẫn được xuất ra sheet riêng
     (``XML4_KhongKhopHRN``) để người dùng rà lại file danh sách của mình.
 
@@ -410,9 +412,7 @@ def _study_note(study, stats):
         )
     if stats["out_of_range"]:
         parts.append(
-            f" {stats['out_of_range']} khớp {study_mapping.COL_HRN} nhưng "
-            f"{RESULT_DATE_COLUMN} ngoài khoảng ngày → đã LOẠI HẲN, "
-            f"không lưu vào sheet nào."
+            f"{stats['out_of_range']} bản ghi của {study_mapping.COL_HRN} với {RESULT_DATE_COLUMN} nằm ngoài khung thời gian sẽ không được thu thập."
         )
     if stats["missing_date"]:
         parts.append(
@@ -431,9 +431,9 @@ def _fmt_yyyymmdd(day):
 
 
 def _study_mapping_ranges(study):
-    """``USUBJID`` -> (ngày bắt đầu nhỏ nhất, ngày kết thúc lớn nhất) theo file mapping.
+    """``MA_NTG`` -> (ngày bắt đầu nhỏ nhất, ngày kết thúc lớn nhất) theo file mapping.
 
-    Mỗi ``USUBJID`` có thể lặp lại trên nhiều dòng (một dòng/bệnh nhân) với
+    Mỗi mã nghiên cứu có thể lặp lại trên nhiều dòng (một dòng/bệnh nhân) với
     khoảng ngày riêng từng dòng; sheet Summary báo khoảng NGOÀI CÙNG bao trọn
     mọi bệnh nhân của nghiên cứu đó, không phải khoảng của một dòng bất kỳ.
     """
@@ -450,7 +450,7 @@ def _study_mapping_ranges(study):
 
 
 def _build_summary_rows(included, unclassified, study):
-    """Gộp thống kê theo ``USUBJID`` cho sheet Summary.
+    """Gộp thống kê theo ``MA_NTG`` cho sheet Summary.
 
     So sánh khoảng ngày KHAI BÁO trong file mapping với khoảng ngày THỰC TẾ có
     trong dữ liệu XML đã xuất — hai khoảng lệch nhau là dấu hiệu người dùng
