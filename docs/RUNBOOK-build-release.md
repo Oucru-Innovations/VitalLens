@@ -184,13 +184,20 @@ phân của PyInstaller — chỉ cần xác nhận không có hit nào trong fi
 
 ## 4. Đóng gói & giao cho người dùng
 
+Phát hành qua GitHub Actions (mục 2b) đã tự làm bước này. Chỉ dùng lệnh dưới
+khi build tay:
+
 ```powershell
-$version = "V10"
-Compress-Archive -Path dist\VitalLens\* -DestinationPath "VitalLens_$version.zip" -Force
+$version = "0.3.0"   # phải khớp __version__ trong apps\__init__.py
+Compress-Archive -Path dist\VitalLens\* -DestinationPath "VitalLens_v$version.zip" -Force
 ```
 
 Đặt ZIP **ngoài** `dist\` để lần build sau không nuốt nó vào gói (bản `V9` đã
 dính lỗi này — ZIP nằm trong `dist\VitalLens\`).
+
+Từ bản này tên ZIP theo semver (`VitalLens_v0.3.0.zip`) thay cho lối cũ
+(`VitalLens_V12.zip`): `services/update_check.py` so sánh version bằng cách
+tách số theo dấu chấm, `V13` không so được với `V12`.
 
 Gửi kèm hướng dẫn cho người dùng:
 
