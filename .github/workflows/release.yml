@@ -21,9 +21,9 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -62,7 +62,7 @@ jobs:
           .venv\Scripts\python -m pip install -r requirements-build.txt
 
       - name: Cache PaddleX models
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.paddlex/official_models
           key: paddlex-PP-OCRv5_mobile_det-en_PP-OCRv5_mobile_rec
