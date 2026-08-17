@@ -7,6 +7,16 @@ KHÔNG cách nào nhận ra cách kia:
     Nuitka      : biến toàn cục ``__compiled__`` được bơm vào mọi module đã
                   biên dịch; **không có** ``sys._MEIPASS``
 
+Ở chế độ onefile của Nuitka, hai đường dẫn dưới đây trỏ đi hai nơi khác nhau
+(đã đo bằng ``smoke_nuitka.py``, đừng suy diễn từ tên biến):
+
+    sys.executable              -> <thư mục bung tạm>\\python.exe   (tài nguyên)
+    __compiled__.containing_dir -> <thư mục chứa EXE gốc>           (chỗ user thấy)
+
+Tên ``containing_dir`` nghe như "chỗ chứa tài nguyên" nhưng nó là chỗ chứa
+**EXE**. Lẫn hai cái này thì `.env` nhúng và danh mục dịch vụ đều không đọc
+được, mà app vẫn chạy tiếp với cấu hình rỗng.
+
 Trước đây năm chỗ trong app tự kiểm tra ``sys.frozen``/``sys._MEIPASS`` tại
 chỗ. Với bản Nuitka, chúng sẽ im lặng coi như "đang chạy từ source": danh mục
 dịch vụ tìm sai đường dẫn, model OCR không được bung ra, log ghi nhầm vào
@@ -41,25 +51,27 @@ def bundle_dir() -> Path | None:
 
     meipass = getattr(sys, "_MEIPASS", "")
     if meipass:
-        return Path(meipass)
-    compiled = globals().get("__compiled__")
-    if compiled is not None:
-        return Path(compiled.containing_dir)
-    return None
+        return Path(meipass)                            # PyInstaller: _internal\
+    if globals().get("__compiled__") is None:
+        return None
+    # Nuitka: sys.executable trỏ vào <thư mục bung>\python.exe — file đó không
+    # tồn tại thật, chỉ thư mục cha mới là thứ cần.
+    return Path(sys.executable).resolve().parent
 
 
 def exe_dir() -> Path | None:
     """Thư mục chứa file người dùng bấm vào. ``None`` khi chạy từ source.
 
-    Ở onefile, ``sys.executable`` trỏ vào binary đã bung trong thư mục tạm;
-    chỉ ``sys.argv[0]`` mới là đường dẫn EXE gốc. Nhầm hai thứ này nghĩa là
-    ``.env`` cạnh EXE không bao giờ được đọc.
+    Ở onefile, ``sys.executable`` trỏ vào thư mục bung tạm; nhầm hai thứ này
+    nghĩa là ``.env`` người dùng đặt cạnh EXE không bao giờ được đọc.
     """
 
     compiled = globals().get("__compiled__")
-    if compiled is not None and getattr(compiled, "onefile", False):
-        return Path(sys.argv[0]).resolve().parent
-    if compiled is not None or getattr(sys, "frozen", False):
+    if compiled is not None:
+        # Đúng cho cả onefile lẫn standalone; không dùng sys.argv[0] vì nó có
+        # thể là đường dẫn tương đối tuỳ chỗ gọi.
+        return Path(compiled.containing_dir)
+    if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return None
 
@@ -77,10 +89,13 @@ if __name__ == "__main__":
     del sys.frozen, sys._MEIPASS
 
     # Giả lập Nuitka onefile: __compiled__ nằm trong globals của chính module.
+    # Giá trị lấy từ lần đo thật bằng smoke_nuitka.py — containing_dir là chỗ
+    # chứa EXE, còn tài nguyên đi theo sys.executable.
     globals()["__compiled__"] = types.SimpleNamespace(
-        containing_dir=str(Path.cwd() / "unpacked"), onefile=True
+        containing_dir=str(Path.cwd() / "dist"), onefile=True, standalone=True
     )
     assert is_frozen()
-    assert bundle_dir() == Path.cwd() / "unpacked"       # tài nguyên: chỗ bung tạm
-    assert exe_dir() == Path(sys.argv[0]).resolve().parent   # EXE: chỗ user bấm
+    assert bundle_dir() == Path(sys.executable).resolve().parent  # chỗ bung tạm
+    assert exe_dir() == Path.cwd() / "dist"                       # chỗ user bấm
+    assert bundle_dir() != exe_dir(), "hai đường dẫn onefile phải khác nhau"
     print("runtime_paths OK")

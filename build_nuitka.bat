@@ -67,6 +67,7 @@ echo [OK] Models found.
 set "ENV_OPT="
 if exist ".env" set "ENV_OPT=--include-data-files=.env=.env"
 if exist ".env" echo.
+if exist ".env" echo [WARN] NHUNG file: %~dp0.env
 if exist ".env" echo [WARN] .env se duoc NHUNG vao VitalLens.exe.
 if exist ".env" echo [WARN] Bearer token nam trong binary phat hanh: ai co file exe
 if exist ".env" echo [WARN] deu rut duoc token ra. Chi lam vay khi token dung chung
@@ -75,7 +76,7 @@ if exist ".env" echo [WARN] Khong muon nhung: doi ten .env roi build lai.
 if not exist ".env" echo [INFO] Khong co .env - build sach, nguoi dung tu nhap qua dialog Cai dat.
 
 :: --- Step 3: Nuitka ---
-:: Ghi chu tung nhom co trong docs/RUNBOOK-build-release.md khong duoc, nen de day:
+:: Vi sao chon tung flag:
 ::   --onefile-tempdir-spec : mac dinh onefile giai nen ~1.5GB vao %TEMP% MOI LAN
 ::       chay roi xoa di => khoi dong cham hang phut. Tro toi mot thu muc co dinh
 ::       theo version => chi lan chay dau tien moi cham.

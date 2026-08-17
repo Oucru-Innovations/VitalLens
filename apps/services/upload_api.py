@@ -251,8 +251,11 @@ def _send_one(
         log.info("  [%s] HTTP status: %d (lần %d)", label, resp.status_code, attempt)
         log.debug("  [%s] Body: %s", label, resp.text[:300] if resp.text else "(trống)")
 
-        if resp.status_code in (200, 201):
+        if resp.status_code in [200]:
             return True, resp.status_code, "OK", False
+ 
+        if resp.status_code in [201]:
+            return False, resp.status_code, "NOT ACCEPTABLE", False
 
         if resp.status_code in RETRYABLE_STATUS and attempt <= max_retries:
             delay = _retry_after_seconds(resp, backoff * attempt)
