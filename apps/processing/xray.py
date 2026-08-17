@@ -1,7 +1,6 @@
 """X-Ray image processing: OCR text removal + DICOM metadata anonymization."""
 
 import os
-import sys
 import logging
 import threading
 from pathlib import Path
@@ -95,11 +94,14 @@ def _save_clean_dicom(ds, raw_pixels, bboxes, output_path):
 
 
 def _deploy_bundled_models():
-    """Copy OCR models from PyInstaller bundle to ~/.paddlex/ if missing."""
-    if not getattr(sys, 'frozen', False):
+    """Copy OCR models from the packaged bundle to ~/.paddlex/ if missing."""
+    from apps.runtime_paths import bundle_dir
+
+    bundle = bundle_dir()
+    if bundle is None:
         return
     import shutil
-    src_root = Path(sys._MEIPASS) / 'paddlex_models'
+    src_root = bundle / 'paddlex_models'
     dst_root = Path.home() / '.paddlex' / 'official_models'
     if not src_root.is_dir():
         return

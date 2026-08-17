@@ -13,6 +13,8 @@ import warnings
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from apps.runtime_paths import is_frozen
+
 
 _NOISY_LOGGERS = (
     "paddle",
@@ -41,13 +43,13 @@ def _resolve_log_dir() -> Path:
     `config_debug.log`, không quét `logs/`. %LOCALAPPDATA% là thư mục riêng
     của từng máy, không bao giờ nằm trong `dist\\`.
 
-    Lặp lại một phần logic của ``apps.config._resolve_app_dir`` tại chỗ (thay
-    vì import) để module này không phụ thuộc ``apps.config`` — thứ tự import
-    ở main.py là load-bearing (patch SSL/env Paddle phải chạy trước khi import
-    bất kỳ gì).
+    Dùng ``apps.runtime_paths`` (chỉ stdlib, không tác dụng phụ) chứ KHÔNG
+    import ``apps.config`` — thứ tự import ở main.py là load-bearing (patch
+    SSL/env Paddle phải chạy trước khi import bất kỳ gì nặng), và
+    ``apps.config`` nạp ``.env`` ngay lúc import.
     """
 
-    if getattr(sys, "frozen", False):
+    if is_frozen():
         base = Path(os.environ.get("LOCALAPPDATA") or Path.home())
         return base / "VitalLens" / "logs"
     return Path(__file__).resolve().parent.parent / "logs"
@@ -128,14 +130,14 @@ def patch_windows_ssl_cert_store() -> None:
 
 
 def patch_paddlex_when_frozen() -> None:
-    """Bypass PaddleX dependency checks when running as a PyInstaller EXE.
+    """Bypass PaddleX dependency checks when running as a packaged binary.
 
-    PaddleX performs dependency checks that fail inside a frozen bundle.
-    Monkey-patch the check functions to return True/None. Only applied
-    when ``sys.frozen`` is set.
+    PaddleX performs dependency checks that fail inside a frozen bundle
+    (PyInstaller lẫn Nuitka). Monkey-patch the check functions to return
+    True/None. Only applied when packaged.
     """
 
-    if not getattr(sys, "frozen", False):
+    if not is_frozen():
         return
     try:
         import paddlex.utils.deps as _pdx_deps

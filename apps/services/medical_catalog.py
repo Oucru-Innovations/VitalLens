@@ -10,11 +10,12 @@ Cột ``Group`` quyết định số phận của bản ghi khi xuất Excel:
 Danh mục là **dữ liệu cố định của bản phát hành**, không phải file cấu hình
 người dùng chỉnh được:
 
-- Bản đóng gói (EXE): chỉ đọc từ ``sys._MEIPASS/database/`` — tức bên trong
-  ``_internal/`` do PyInstaller giải nén. Bản phát hành **không** kèm bản CSV
-  rời cạnh EXE nữa, nên sửa file cạnh EXE không còn tác dụng gì.
+- Bản đóng gói (EXE): chỉ đọc từ thư mục tài nguyên bên trong gói
+  (``apps.runtime_paths.bundle_dir()`` — ``_internal/`` với PyInstaller, thư
+  mục bung tạm với Nuitka onefile). Bản phát hành **không** kèm bản CSV rời
+  cạnh EXE nữa, nên sửa file cạnh EXE không còn tác dụng gì.
 - Bản chạy từ source: đọc từ ``<APP_DIR>/database/`` (máy dev là môi trường
-  tin cậy, và không có ``_MEIPASS`` để đọc).
+  tin cậy, và không có thư mục gói để đọc).
 
 Mọi lần nạp đều đối chiếu SHA-256 với ``CATALOG_SHA256`` hardcode trong file
 này. Vân tay nằm trong source nên nằm trong git: đổi danh mục bắt buộc phải
@@ -40,7 +41,6 @@ import csv
 import hashlib
 import io
 import logging
-import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +48,7 @@ from types import MappingProxyType
 from typing import Dict, List, Mapping, Optional
 
 from apps.config import APP_DIR
+from apps.runtime_paths import bundle_dir
 
 log = logging.getLogger(__name__)
 
@@ -106,14 +107,14 @@ _cache_lock = threading.Lock()
 def catalog_search_paths() -> List[Path]:
     """Vị trí file danh mục — bản đóng gói KHÔNG đọc file cạnh EXE.
 
-    Khi chạy dạng EXE, chỉ đọc trong bundle PyInstaller. Đây chính là chỗ chặn
+    Khi chạy dạng EXE, chỉ đọc trong bundle. Đây chính là chỗ chặn
     việc người dùng thả một CSV khác cạnh ``VitalLens.exe`` để đổi kết quả lọc:
     app không nhìn tới đường dẫn đó nữa.
     """
 
-    bundle_dir = getattr(sys, "_MEIPASS", "")
-    if bundle_dir:
-        return [Path(bundle_dir) / CATALOG_DIRNAME / CATALOG_FILENAME]
+    bundle = bundle_dir()
+    if bundle is not None:
+        return [bundle / CATALOG_DIRNAME / CATALOG_FILENAME]
     return [Path(APP_DIR) / CATALOG_DIRNAME / CATALOG_FILENAME]
 
 
