@@ -306,12 +306,13 @@ Runtime defaults live in `apps/config.py` (`Settings` dataclass). Secrets and pe
 
 ### Where Secrets are Loaded From
 
-At startup `apps/config.py` looks for a config file **in the app root** and loads it into `os.environ` (without overriding existing env vars):
+At startup `apps/config.py` loads **every** file below, in this order, into `os.environ` without overriding what is already set — so the first file to define a key wins, and OS-level env vars beat all of them:
 
-1. `.env` (preferred, standard dotenv convention)
-2. `env` (fallback — handy on Windows where Explorer refuses to create filenames starting with a dot)
+1. `%APPDATA%\VitalLens\.env` — per-user config written by the in-app settings dialog. Lives **outside** the app folder, so it survives unzipping a new release over the old one and does not travel when someone copies the app folder to a colleague. (`~/.config/VitalLens/.env` off Windows.)
+2. `<app root>\.env` — the original location, still read for existing installs.
+3. `<app root>\env` — fallback, handy on Windows where Explorer refuses to create filenames starting with a dot.
 
-When `python-dotenv` is not available (common in PyInstaller bundles), a built-in fallback parser reads the `.env` file directly.
+When `python-dotenv` is not available (common in PyInstaller bundles), a built-in fallback parser reads the file directly.
 
 **App root** means:
 - During development (`python main.py`): the repo root (same folder as `main.py`).
@@ -319,8 +320,11 @@ When `python-dotenv` is not available (common in PyInstaller bundles), a built-i
 
 ### Setup (same steps for developers and end users)
 
-**Every machine creates its own `.env`.** Builds ship `.env.example` only — no
-release artifact ever contains a real credential.
+**No release artifact ever contains a real credential** — builds ship `.env.example` only, and `build.bat` fails if a `.env` reaches `dist\`.
+
+End users do not edit any file: run the app, click **⚙ Cấu hình kết nối** at the bottom of the home page, fill in server address + token, save, restart. That writes `%APPDATA%\VitalLens\.env` (see `apps/services/user_config.py`). An `http://` address to anything but localhost is warned about and requires a second click — the bearer token would otherwise travel in cleartext.
+
+Editing a file by hand still works, e.g. when running from source:
 
 ```powershell
 copy .env.example .env
@@ -348,6 +352,7 @@ Important keys:
 - `API_UPLOAD_OWNER` — Default value pre-filled in the owner-email prompt.
 - `SFTP_DEMO_MODE=true` — Use local folders instead of a real SFTP server.
 - `SFTP_HOST`, `SFTP_PORT`, `SFTP_PATH` — SFTP connection settings.
+- `UPDATE_MANIFEST_URL` — Optional URL of a small public JSON (`{"version": "0.3.0", "url": "..."}`). The home page then shows "a new version is available" with a download link. The app never downloads or installs anything itself. Unset (default) = no outbound request at all.
 
 OS-level environment variables win over `.env` (`override=False`), which is handy
 for a temporary override without editing the file.

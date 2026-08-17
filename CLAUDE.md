@@ -45,7 +45,11 @@ When adding file access, extend `StorageBackend` (both `LocalBackend` and `SftpB
 
 `apps/config.py` loads the dotenv file **as a module import side effect**, then freezes the values into a `Settings` instance *and* into flat module constants (`API_UPLOAD_URL`, `SFTP_HOST`, …). Pages do `from apps.config import API_UPLOAD_URL`, so those are bound once at import — mutating `os.environ` later has no effect. To make a setting live-reloadable you must read `SETTINGS`/`os.environ` at call time instead.
 
-`APP_DIR` resolves to the repo root in dev and to the folder containing `VitalLens.exe` when frozen; the dotenv file is looked up there as `.env` first, then `env` (no dot — Windows Explorer refuses dotfiles). A built-in parser substitutes for `python-dotenv` inside PyInstaller bundles. `override=False` throughout, so OS env vars win.
+`APP_DIR` resolves to the repo root in dev and to the folder containing `VitalLens.exe` when frozen. Three dotenv locations are loaded **in order, all of them** (not first-match): `%APPDATA%\VitalLens\.env` (`services/user_config.py`), then `APP_DIR/.env`, then `APP_DIR/env` (no dot — Windows Explorer refuses dotfiles). `override=False` throughout, so the earliest file to set a key wins and OS env vars beat all three. A built-in parser substitutes for `python-dotenv` inside PyInstaller bundles.
+
+The `%APPDATA%` location is the one users get: `widgets/settings_dialog.py` writes it so nobody has to rename `.env.example` in Explorer, and it survives unzipping a new release over the app folder. Releases therefore ship **no** config file and `build.bat`'s leak gate stays absolute — don't relax it to bundle a `.env`. Because config is snapshotted at import, the dialog tells the user to restart rather than pretending the new values are live.
+
+`is_secure_endpoint()` is the single definition of "safe to send the bearer token here" (empty or `https://`, or `http://` on localhost). Both the startup log warning and the settings dialog call it; it warns rather than blocks, because blocking would push users of an `http://` endpoint back to Notepad and lose the warning entirely.
 
 ### Upload state machine (`services/export_store.py`)
 

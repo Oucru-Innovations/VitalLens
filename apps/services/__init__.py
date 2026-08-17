@@ -10,4 +10,6 @@
 - medical_catalog: danh mục dịch vụ y tế (tra Name_Method + nhóm Include/Exclude).
 - pdf_redact     : render PDF và xuất bản PDF đã tô đen.
 - upload_api     : gửi cặp PDF + CSV qua HTTP tới backend.
+- update_check   : đọc manifest JSON để báo có bản mới (không tự cài).
+- user_config    : ghi config riêng của user vào %APPDATA%, ngoài thư mục app.
 """

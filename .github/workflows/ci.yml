@@ -1,0 +1,62 @@
+name: CI
+
+# Kiểm tra rẻ tiền chạy trên mọi PR. Repo không có test suite (xem CLAUDE.md),
+# nên đây là toàn bộ những gì máy có thể tự xác minh: cú pháp + không lọt secret.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax check
+        run: python -m compileall -q apps main.py
+
+      - name: Self-check các module có logic thuần
+        # Chỉ những module không import tkinter — runner Linux của setup-python
+        # không chắc có sẵn Tcl/Tk.
+        run: |
+          python -m apps.config
+          python -m apps.services.update_check
+          python -m apps.services.user_config
+
+      - name: Không file secret nào được commit
+        run: |
+          tracked=$(git ls-files .env env config_debug.log)
+          if [ -n "$tracked" ]; then
+            echo "::error::File secret bị commit vào repo: $tracked"
+            exit 1
+          fi
+
+      - name: Vân tay danh mục khớp CATALOG_SHA256
+        # build_exe.spec cũng kiểm tra, nhưng ở đây thì biết sớm hơn 20 phút
+        # thay vì hỏng lúc build bản phát hành.
+        run: |
+          python - <<'PY'
+          import ast, hashlib, pathlib, sys
+          src = pathlib.Path("apps/services/medical_catalog.py")
+          expected = next(
+              ast.literal_eval(n.value)
+              for n in ast.parse(src.read_text(encoding="utf-8")).body
+              if isinstance(n, ast.Assign)
+              and any(getattr(t, "id", "") == "CATALOG_SHA256" for t in n.targets)
+          )
+          actual = hashlib.sha256(
+              pathlib.Path("database/database_medical.csv").read_bytes()
+          ).hexdigest()
+          if actual != expected:
+              sys.exit(
+                  f"::error::Danh mục đã đổi nhưng CATALOG_SHA256 chưa cập nhật.\n"
+                  f"  actual  : {actual}\n  expected: {expected}"
+              )
+          print(f"OK {actual[:12]}...")
+          PY

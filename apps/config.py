@@ -109,14 +109,21 @@ def _redact(key: str, value: str) -> str:
 
 
 def _load_dotenv_if_present(app_dir: Path) -> None:
-    """Load a dotenv config file if one exists.
+    """Load dotenv config files if any exist.
 
-    Looks for ``.env`` first, then falls back to ``env`` (no dot) — handy
-    on Windows where Explorer refuses to create filenames starting with
-    a dot.
+    Đọc theo thứ tự ưu tiên, **nạp hết** chứ không dừng ở file đầu tiên
+    (``override=False`` nên file nào đặt khoá trước thì file đó thắng):
+
+    1. ``%APPDATA%\\VitalLens\\.env`` — config riêng của người dùng, nằm
+       NGOÀI thư mục app nên không mất khi giải nén đè bản mới và không đi
+       theo khi ai đó copy thư mục app cho đồng nghiệp. Xem
+       ``apps/services/user_config.py``.
+    2. ``<app_dir>/.env`` rồi ``<app_dir>/env`` — cách cũ, giữ để bản cài sẵn
+       của người dùng hiện tại không hỏng. Tên không dấu chấm là vì Windows
+       Explorer từ chối tạo file bắt đầu bằng dấu chấm.
 
     Existing ``os.environ`` values are NOT overridden (``override=False``),
-    so OS-level environment variables always win over the file.
+    so OS-level environment variables always win over every file.
 
     When ``python-dotenv`` is not importable (common in PyInstaller
     bundles), falls back to a simple built-in parser.
@@ -151,30 +158,30 @@ def _load_dotenv_if_present(app_dir: Path) -> None:
     _dbg(f"frozen   = {getattr(sys, 'frozen', False)}")
     _dbg(f"cwd      = {Path.cwd()}")
 
-    env_path: Path | None = None
-    for filename in (".env", "env"):
-        candidate = app_dir / filename
+    from apps.services.user_config import USER_ENV_PATH
+
+    loaded_any = False
+    for candidate in (USER_ENV_PATH, app_dir / ".env", app_dir / "env"):
         exists = candidate.is_file()
         _dbg(f"Check    : {candidate} -> {'FOUND' if exists else 'not found'}")
-        if exists:
-            env_path = candidate
-            break
+        if not exists:
+            continue
 
-    if env_path is None:
+        loaded_any = True
+        _dbg(f"Loading  : {candidate} ({candidate.stat().st_size} bytes)")
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(dotenv_path=candidate, override=False)
+            _dbg("Parser   : python-dotenv")
+        except ImportError:
+            # python-dotenv not bundled → use built-in parser
+            _parse_env_file_manually(candidate)
+            _dbg("Parser   : built-in (dotenv not available)")
+
+    if not loaded_any:
         _dbg("RESULT   : No .env file found!")
         _flush()
         return
-
-    _dbg(f"Loading  : {env_path} ({env_path.stat().st_size} bytes)")
-
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(dotenv_path=env_path, override=False)
-        _dbg("Parser   : python-dotenv")
-    except ImportError:
-        # python-dotenv not bundled → use built-in parser
-        _parse_env_file_manually(env_path)
-        _dbg("Parser   : built-in (dotenv not available)")
 
     for key in ("API_UPLOAD_URL", "API_BEARER_TOKEN", "API_UPLOAD_OWNER"):
         _dbg(f"RESULT   : {key} = {_redact(key, os.environ.get(key, ''))}")
@@ -206,6 +213,10 @@ class Settings:
     api_upload_url: str = ""
     api_bearer_token: str = ""
     api_upload_owner: str = ""
+
+    # URL của manifest cập nhật (JSON công khai, không chứa token).
+    # Rỗng = tắt hẳn việc kiểm tra. Xem apps/services/update_check.py.
+    update_manifest_url: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -243,26 +254,40 @@ class Settings:
             api_upload_url=_env_str("API_UPLOAD_URL", ""),
             api_bearer_token=_env_str("API_BEARER_TOKEN", ""),
             api_upload_owner=_env_str("API_UPLOAD_OWNER", ""),
+            update_manifest_url=_env_str("UPDATE_MANIFEST_URL", ""),
         )
 
 
 SETTINGS: Settings = Settings.from_env()
 
 
-def _warn_insecure_endpoint(settings: Settings) -> None:
-    """Cảnh báo khi bearer token sẽ đi qua kênh không mã hoá.
+def is_secure_endpoint(url: str) -> bool:
+    """True khi gửi bearer token tới ``url`` là an toàn.
 
     ``http://`` gửi header ``Authorization`` dạng cleartext — bất kỳ ai trên
     cùng đường truyền đều đọc được token lẫn dữ liệu bệnh nhân. Localhost thì
-    bỏ qua vì không ra khỏi máy.
+    bỏ qua vì không ra khỏi máy. Rỗng = chưa cấu hình, không có gì để lộ.
+
+    Một nơi duy nhất định nghĩa luật này: cảnh báo lúc khởi động và dialog
+    nhập cấu hình đều gọi hàm này. Hai bản logic bảo mật sẽ lệch nhau.
     """
 
+    url = (url or "").strip().lower()
+    if not url or url.startswith("https://"):
+        return True
+    if not url.startswith("http://"):
+        return False
+    host = url[len("http://"):].split("/", 1)[0].split(":", 1)[0]
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _warn_insecure_endpoint(settings: Settings) -> None:
+    """Ghi log cảnh báo khi endpoint upload không đủ an toàn."""
+
     url = (settings.api_upload_url or "").strip().lower()
-    if not url or not url.startswith("http://"):
+    if not url.startswith("http://") or is_secure_endpoint(url):
         return
     host = url[len("http://"):].split("/", 1)[0].split(":", 1)[0]
-    if host in {"localhost", "127.0.0.1", "::1"}:
-        return
     log.warning(
         "API_UPLOAD_URL dùng http:// (host=%s) — bearer token và dữ liệu bệnh "
         "nhân sẽ đi qua mạng KHÔNG mã hoá. Hãy chuyển sang https://.",
@@ -285,6 +310,7 @@ SFTP_UPLOAD_DEFAULT_USER: str = SETTINGS.sftp_upload_default_user
 API_UPLOAD_URL: str = SETTINGS.api_upload_url
 API_BEARER_TOKEN: str = SETTINGS.api_bearer_token
 API_UPLOAD_OWNER: str = SETTINGS.api_upload_owner
+UPDATE_MANIFEST_URL: str = SETTINGS.update_manifest_url
 
 
 __all__ = [
@@ -320,4 +346,17 @@ __all__ = [
     "API_UPLOAD_URL",
     "API_BEARER_TOKEN",
     "API_UPLOAD_OWNER",
+    "UPDATE_MANIFEST_URL",
+    "is_secure_endpoint",
 ]
+
+
+if __name__ == "__main__":
+    assert is_secure_endpoint("https://a.example.org/upload")
+    assert is_secure_endpoint("")
+    assert is_secure_endpoint("http://localhost:8000/upload")
+    assert is_secure_endpoint("http://127.0.0.1/upload")
+    assert not is_secure_endpoint("http://a.example.org/upload")
+    assert not is_secure_endpoint("http://a.example.org:8080/upload")
+    assert not is_secure_endpoint("ftp://a.example.org")
+    print("config OK")

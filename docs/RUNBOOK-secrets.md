@@ -19,7 +19,8 @@ Quy trình cấp, xoay và thu hồi credential cho VitalLens.
 
 | Vị trí | Nội dung | Trong git? |
 | --- | --- | --- |
-| `<app root>\.env` | Token thật của từng máy | Không (`.gitignore`) |
+| `%APPDATA%\VitalLens\.env` | **Nơi khuyến nghị** — token thật của từng user | Không (ngoài repo) |
+| `<app root>\.env` | Cách cũ, vẫn đọc được | Không (`.gitignore`) |
 | `<app root>\env` | Fallback cho Windows Explorer | Không (`.gitignore`) |
 | `.env.example` | Template, chỉ có placeholder | **Có** — an toàn |
 | `config_debug.log` | Chẩn đoán, đã redact, chỉ ghi khi bật cờ | Không (`.gitignore`) |
@@ -27,8 +28,14 @@ Quy trình cấp, xoay và thu hồi credential cho VitalLens.
 **App root** = thư mục chứa `main.py` khi chạy từ source, hoặc thư mục chứa
 `VitalLens.exe` khi chạy bản đóng gói.
 
-Biến môi trường cấp OS **thắng** giá trị trong `.env` (`load_dotenv(override=False)`)
-— tiện khi cần override tạm mà không sửa file.
+Cả ba file đều được nạp theo đúng thứ tự trên, `override=False` nên **file nào
+đặt khoá trước thì thắng** — và biến môi trường cấp OS thắng tất cả (tiện khi
+cần override tạm mà không sửa file).
+
+Vì sao ưu tiên `%APPDATA%`: bản phát hành là ZIP giải nén đè, config nằm trong
+thư mục app thì mỗi lần cập nhật phải chép tay sang. Và người dùng hay copy
+nguyên thư mục app cho đồng nghiệp — token đi theo. Xem
+`apps/services/user_config.py`.
 
 ---
 
@@ -38,7 +45,24 @@ Biến môi trường cấp OS **thắng** giá trị trong `.env` (`load_dotenv
 2. Gửi bản build ZIP qua kênh thường
 3. Gửi token qua **kênh khác** (password manager, tin nhắn mã hoá) — không gửi
    chung email với file ZIP
-4. Hướng dẫn người dùng:
+4. Hướng dẫn người dùng — **không cần sửa file nào**:
+
+> Mở `VitalLens.exe` → ở cuối trang chủ bấm **⚙ Cấu hình kết nối** → điền 3 ô
+> → **Lưu** → khởi động lại app.
+
+App ghi vào `%APPDATA%\VitalLens\.env`, không đụng tới thư mục cài đặt.
+
+| Ô | Giá trị |
+| --- | --- |
+| Địa chỉ server | `https://vital-ei.oucru.org/api/v2/file/upload` |
+| Token | token được cấp riêng cho người đó |
+| Email mặc định | `ten.ban@oucru.org` |
+
+Địa chỉ **phải là `https://`**. Gõ `http://` thì dialog cảnh báo và bắt bấm Lưu
+lần thứ hai — cố ý, để không ai lỡ tay gửi token qua kênh không mã hoá.
+
+<details>
+<summary>Cách cũ (sửa file tay) — vẫn dùng được</summary>
 
 ```powershell
 cd C:\VitalLens
@@ -46,13 +70,14 @@ copy .env.example .env
 notepad .env
 ```
 
-Điền:
-
 ```env
 API_UPLOAD_URL=https://vital-ei.oucru.org/api/v2/file/upload
 API_BEARER_TOKEN=<token được cấp riêng>
 API_UPLOAD_OWNER=ten.ban@oucru.org
 ```
+
+Nhược điểm: mất khi giải nén đè bản mới, và đi theo nếu ai đó copy cả thư mục.
+</details>
 
 5. Xác nhận hoạt động: mở app → trang Upload PDF → bấm Upload. Nếu hiện dialog
    "CHƯA CÓ BACKEND ENDPOINT" nghĩa là `.env` chưa được đọc — kiểm tra file có

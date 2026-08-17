@@ -80,6 +80,66 @@ làm người dùng tưởng là sửa được.
 
 ---
 
+## 2b. Phát hành tự động bằng GitHub Actions
+
+Cách phát hành **được khuyến nghị**. Máy dev có `.env` thật nằm cạnh repo, mỗi
+lần đóng gói tay là một cơ hội để nó lọt vào ZIP; runner CI khởi tạo trắng nên
+không có credential nào để lọt.
+
+```powershell
+# 1. Tăng __version__ trong apps\__init__.py, commit
+# 2. Tag đúng số đó (workflow dừng nếu tag lệch __version__)
+git tag v0.3.0
+git push origin v0.3.0
+```
+
+`.github/workflows/release.yml` chạy trên `windows-latest`:
+
+1. Đối chiếu tag với `__version__` trong `apps\__init__.py`
+2. Chặn nếu `.env` / `env` / `config_debug.log` bị commit vào repo
+3. Cài deps vào `.venv` (chính là priority 2 của `build.bat`)
+4. Tải sẵn PaddleX models (có cache) bằng `apps.processing.xray._get_ocr()`
+5. Chạy `build.bat` — **cổng quét secret ở bước 4 của script vẫn là chốt chặn**
+6. Nén bằng `7z` (nhanh hơn `Compress-Archive` nhiều lần với ~700 MB)
+7. `gh release create` — đính kèm ZIP + `latest.json`
+
+`workflow_dispatch` chạy hết bước 6 nhưng **không** tạo Release: dùng để kiểm
+tra build còn xanh mà không phát hành.
+
+**Chi phí:** repo private + runner Windows = hệ số 2x phút Actions, mỗi lần
+~20–40 phút. Vì thế job chỉ chạy khi có tag. `ci.yml` (compileall + quét secret
++ vân tay danh mục) chạy trên `ubuntu-latest` ở mọi PR và gần như miễn phí.
+
+### `.env` và CI
+
+**Không** đưa token thật vào GitHub Secrets để ghi thành `.env` trong ZIP: ai
+tải bản phát hành cũng đọc được nó. Mô hình hiện tại (`.env.example` + token
+cấp riêng từng người) vẫn đúng — CI chỉ làm nó khó phá hơn:
+
+| Rủi ro | Chốt chặn |
+| --- | --- |
+| `.env` của máy dev lọt vào ZIP | Runner sạch, không có `.env` |
+| Ai đó commit `.env` vào repo | `ci.yml` + `release.yml` dừng ngay |
+| Build tay quên bước quét secret | Không còn build tay |
+| Phát hành mang số version cũ | Tag phải khớp `__version__` |
+
+Giá trị **không bí mật** cho cả tổ chức (ví dụ `API_UPLOAD_URL`) nếu muốn điền
+sẵn thì dùng GitHub **Variables** ghi đè vào `.env.example` trong workflow —
+tuyệt đối không làm thế với `API_BEARER_TOKEN`.
+
+### Thông báo bản mới cho người dùng
+
+`release.yml` sinh `latest.json` (`{"version", "url"}`, không chứa token). Host
+file đó ở một URL công khai rồi đặt `UPDATE_MANIFEST_URL` trong `.env` của người
+dùng — trang chủ sẽ hiện "đã có bản X, bấm để tải". App **chỉ báo, không tự
+cài**: xem `apps/services/update_check.py` để biết lý do.
+
+Repo đang private nên link asset của Release đòi đăng nhập, không dùng trực tiếp
+làm `url` tải được; `latest.json` trỏ về trang Release (trình duyệt của người
+dùng đã đăng nhập sẵn).
+
+---
+
 ## 3. Kiểm tra trước khi phát hành
 
 Chạy đủ 5 lệnh này trên `dist\VitalLens\`. Tất cả phải sạch:
@@ -134,12 +194,17 @@ dính lỗi này — ZIP nằm trong `dist\VitalLens\`).
 
 Gửi kèm hướng dẫn cho người dùng:
 
+> **Cài lần đầu**
 > 1. Giải nén vào thư mục bất kỳ (ví dụ `C:\VitalLens\`)
-> 2. Đổi tên `.env.example` thành `.env`
-> 3. Mở `.env` bằng Notepad, điền `API_UPLOAD_URL` và `API_BEARER_TOKEN` được cấp riêng
-> 4. Chạy `VitalLens.exe`
+> 2. Chạy `VitalLens.exe`
+> 3. Cuối trang chủ bấm **⚙ Cấu hình kết nối**, điền địa chỉ server + token
+>    được cấp riêng, bấm **Lưu**
+> 4. Khởi động lại app
 >
-> Không có `.env`, chức năng Upload sẽ chạy ở chế độ demo (không gửi lên server).
+> **Cập nhật bản mới:** giải nén đè lên thư mục cũ. Không phải làm lại bước 3 —
+> cấu hình nằm ở `%APPDATA%\VitalLens\`, ngoài thư mục app.
+>
+> Chưa cấu hình thì chức năng Upload chạy ở chế độ demo (không gửi lên server).
 
 ---
 
@@ -149,7 +214,9 @@ Bản build là onedir độc lập, không có installer và không đụng reg
 
 1. Người dùng xoá thư mục bản mới
 2. Giải nén lại ZIP bản cũ
-3. Giữ nguyên `.env` — file này thuộc về người dùng, không nằm trong ZIP
+3. Không phải làm gì với cấu hình — `%APPDATA%\VitalLens\.env` nằm ngoài thư
+   mục app nên không bị đụng tới. (Người dùng cài từ bản cũ có thể còn `.env`
+   cạnh EXE; file đó vẫn được đọc, nhưng nhớ chép sang trước khi xoá thư mục.)
 
 Dữ liệu đã xuất (`output_pdf\pending\`, `output_pdf\uploaded\`) **không** nằm
 trong thư mục app, nên rollback không làm mất cặp PDF+CSV nào.

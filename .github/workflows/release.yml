@@ -1,0 +1,102 @@
+name: Release
+
+# Đẩy tag `vX.Y.Z` → build EXE trên Windows sạch, quét secret, tạo GitHub Release.
+#
+# Vì sao build trên máy CI chứ không phải máy dev: máy dev có `.env` thật nằm
+# cạnh repo, và mọi lần đóng gói thủ công đều là một cơ hội để nó lọt vào ZIP.
+# Runner khởi tạo trắng, không có credential nào để lọt.
+#
+# LƯU Ý CHI PHÍ: repo private + runner Windows = hệ số 2x phút Actions. Job này
+# ~20-40 phút/lần nên chỉ chạy khi tag, không chạy theo push.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:   # chạy tay để kiểm tra build còn xanh, không phát hành
+
+permissions:
+  contents: write      # cần để `gh release create`
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Đọc version & đối chiếu với tag
+        # Nguồn duy nhất của số version là apps/__init__.py. Tag lệch nghĩa là
+        # quên bump — dừng ngay, đừng phát hành bản mang số cũ.
+        shell: bash
+        run: |
+          v=$(python -c "import ast,pathlib;print(next(ast.literal_eval(n.value) for n in ast.parse(pathlib.Path('apps/__init__.py').read_text(encoding='utf-8')).body if isinstance(n,ast.Assign) and any(getattr(t,'id','')=='__version__' for t in n.targets)))")
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "v$v" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME khác __version__ ($v) trong apps/__init__.py"
+            exit 1
+          fi
+          echo "Building VitalLens v$v"
+
+      - name: Không file secret nào được commit
+        shell: bash
+        run: |
+          tracked=$(git ls-files .env env config_debug.log)
+          if [ -n "$tracked" ]; then
+            echo "::error::File secret bị commit vào repo: $tracked"
+            exit 1
+          fi
+
+      - name: Cài dependency vào .venv
+        # build.bat tự ưu tiên .venv\Scripts\python.exe (priority 2) nên không
+        # phải sửa gì trong script build. KHÔNG cài vào python hệ thống: nếu
+        # build.bat rơi xuống priority 3 (`py`) nó có thể bắt đúng interpreter
+        # khác và thiếu PyInstaller.
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python -m pip install --upgrade pip
+          .venv\Scripts\python -m pip install -r requirements-build.txt
+
+      - name: Cache PaddleX models
+        uses: actions/cache@v4
+        with:
+          path: ~/.paddlex/official_models
+          key: paddlex-PP-OCRv5_mobile_det-en_PP-OCRv5_mobile_rec
+
+      - name: Tải sẵn OCR models
+        # build_exe.spec đóng gói model từ %USERPROFILE%\.paddlex\official_models.
+        # Gọi thẳng _get_ocr() để khỏi chép lại tên/tham số model ở đây — sửa
+        # model trong xray.py là bước này tự theo.
+        run: .venv\Scripts\python -c "from apps.logging_setup import setup_logging; setup_logging(); from apps.processing.xray import _get_ocr; _get_ocr()"
+
+      - name: Build
+        # build.bat = PyInstaller + copy .env.example + xoá database\ thừa +
+        # quét secret trong dist\. Cổng chặn secret nằm sẵn trong đó, không
+        # dựng lại ở đây.
+        run: .\build.bat
+
+      - name: Đóng gói ZIP
+        # 7z có sẵn trên runner và nhanh hơn Compress-Archive nhiều lần với
+        # thư mục ~700 MB (runbook vẫn dùng Compress-Archive cho build tay).
+        run: 7z a -bso0 "VitalLens_v$env:VERSION.zip" .\dist\VitalLens\*
+
+      - name: Sinh manifest cập nhật
+        # File này chỉ có version + link, KHÔNG có token. Muốn app tự báo bản
+        # mới thì host nó ở một URL công khai rồi đặt UPDATE_MANIFEST_URL trong
+        # .env của người dùng — repo đang private nên link asset của Release
+        # đòi đăng nhập, không dùng trực tiếp được.
+        shell: bash
+        run: |
+          printf '{"version": "%s", "url": "https://github.com/%s/releases/latest"}\n' \
+            "$VERSION" "$GITHUB_REPOSITORY" > latest.json
+          cat latest.json
+
+      - name: Tạo GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$env:GITHUB_REF_NAME" --generate-notes "VitalLens_v$env:VERSION.zip" latest.json
