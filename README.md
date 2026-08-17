@@ -117,8 +117,8 @@ and a report at the end lists what went up and what did not, with reasons.
 
 Only `LOAIHOSO` = **XML4** is decoded; every other record type is skipped.
 Each decoded row is matched against the service catalogue on
-`MA_DICH_VU` = `ID_SERVICE`, which decides both the added `Name_Method`
-column and where the row lands:
+`MA_DICH_VU` = `ID_SERVICE`, which decides both the added `TEN_DICH_VU` (formerly `Name_Method` in operation database) and
+where the row lands:
 
 ```text
   XML4 record ──► MA_DICH_VU ──► database_medical.csv (ID_SERVICE)
@@ -128,10 +128,10 @@ column and where the row lands:
               │                            │                          │
               ▼                            ▼                          ▼
    sheet "XML4_Include"                 dropped            sheet "XML4_ChuaPhanLoai"
-   + Name_Method filled              (counted only)        + Name_Method blank
+   + TEN_DICH_VU filled              (counted only)        + TEN_DICH_VU blank
 ```
 
-- `Name_Method` is inserted immediately after `MA_DICH_VU` so the code and its
+- `TEN_DICH_VU` is inserted immediately after `MA_DICH_VU` so the code and its
   name read together.
 - Matching ignores surrounding whitespace and letter case — a few catalogue
   codes carry a lowercase letter (`27.205b.0463`).
@@ -149,30 +149,32 @@ decided by the **header row**, so there is no extra switch to remember:
 
 | Header contains | Mode | What happens |
 | --- | --- | --- |
-| `STUDY_ID` **and** `HRN` | study list | adds a `STUDY_ID` column, filters by date, hides `ID` and `MA_LK` |
+| `USUBJID` **and** `EMR_ID` | study list | adds a `MA_NTG` column, filters by date, hides `ID` and `MA_LK` |
 | anything else | plain mapping | A1 names the XML4 field to join on; the remaining columns are appended, nothing is filtered |
 
-**Study list.** Columns `STUDY_ID`, `HRN`, plus an optional date range
+**Study list.** Columns `USUBJID`, `EMR_ID`, plus an optional date range
 (`START_DATE` and one of `END_DATE` / `FROM_DATE` / `TO_DATE`). Order does not
-matter. `HRN` is matched to a record two ways, in this order:
+matter. The `USUBJID` value is exported under the column name `MA_NTG` — the
+header in your file stays `USUBJID`. `EMR_ID` is matched to a record two ways,
+in this order:
 
 ```text
-  HRN ──► MA_LK                      (whole value)
-      └─► last 10 chars of ID, then of ID_GOC
+  EMR_ID ──► MA_LK                      (whole value)
+         └─► last 10 chars of ID, then of ID_GOC
 ```
 
 - The full match is tried first because it is the stronger evidence. If two
-  `HRN`s share the same last 10 characters, matching by `ID` is disabled for
-  those codes rather than guessing — a wrong `STUDY_ID` mixes up patients.
+  `EMR_ID`s share the same last 10 characters, matching by `ID` is disabled for
+  those codes rather than guessing — a wrong `MA_NTG` mixes up patients.
 - With a date range, `NGAY_KQ` is compared on **date only** (`yyyymmdd`); the
   time part is ignored so both endpoints count as whole days. Rows with no
   dates in the list are not filtered.
 - A date the app cannot read **fails the run** — silently ignoring it would
   export data from outside the study window with nobody noticing. A row that
-  matches an `HRN` but has no readable `NGAY_KQ` is kept and reported.
-- Rows that get no `STUDY_ID` (no match, or outside the window) are **not
-  thrown away**: they go to sheet `XML4_KhongKhopHRN`, which keeps `ID` and
-  `MA_LK` so the list can be corrected. `ID_GOC` stays on every sheet.
+  matches an `EMR_ID` but has no readable `NGAY_KQ` is kept and reported.
+- Rows that match no `EMR_ID` are **not thrown away**: they go to sheet
+  `XML4_KhongKhopHRN`, which keeps `ID` and `MA_LK` so the list can be
+  corrected. `ID_GOC` stays on every sheet.
 
 #### The catalogue is release data, not user config
 

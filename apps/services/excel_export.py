@@ -11,7 +11,38 @@ def sanitize_sheet_name(name: str, default: str = "Sheet1") -> str:
     return cleaned[:31]
 
 
-def append_row_as_text(ws, values: Iterable) -> None:
+# Màu NỀN cảnh báo cho các ô cần chú ý (vd. sheet Summary). PHẢI là aRGB 8 ký
+# tự: openpyxl đệm chuỗi 6 ký tự bằng "00" ở ĐẦU, tức "FF0000" ra
+# rgb="00FF0000" (alpha 0 — vô hình), không phải màu đỏ mong muốn.
+_ALERT_FILL_COLOR = "FFFF0000"
+
+_alert_fill_cache = None
+
+
+def _alert_fill():
+    """Nền đỏ dùng chung cho mọi ô cảnh báo. Tạo đúng MỘT lần.
+
+    Tô NỀN chứ không phải màu chữ: nền vẫn hiện được trên ô KHÔNG có chữ (vd.
+    ngày trống của một nghiên cứu 0 bản ghi), trong khi chữ đỏ trên ô trống thì
+    không có gì để tô — không có tác dụng cảnh báo.
+
+    openpyxl gom các PatternFill giống nhau vào chung một entry trong bảng
+    style của workbook, nên hàng nghìn ô cùng trỏ về một Fill instance chỉ tốn
+    một dòng trong ``styles.xml``; cấp Fill mới cho từng ô vừa phí vừa làm
+    phình bảng style không cần thiết. Import openpyxl vẫn nằm trong hàm, giống
+    mọi chỗ khác trong repo — openpyxl chỉ nạp khi thật sự xuất Excel.
+    """
+
+    global _alert_fill_cache
+    if _alert_fill_cache is None:
+        from openpyxl.styles import PatternFill
+        _alert_fill_cache = PatternFill(
+            fill_type="solid", start_color=_ALERT_FILL_COLOR, end_color=_ALERT_FILL_COLOR,
+        )
+    return _alert_fill_cache
+
+
+def append_row_as_text(ws, values: Iterable, alerts: Iterable[bool] | None = None) -> None:
     """Ghi 1 dòng, ép các ô bị hiểu nhầm là công thức về dạng text.
 
     openpyxl gán ``data_type="f"`` cho mọi chuỗi bắt đầu bằng ``=`` (và chỉ
@@ -29,18 +60,35 @@ def append_row_as_text(ws, values: Iterable) -> None:
     phương số dòng — đo được 0,37s cho 500 dòng nhưng 21s cho 4.000 dòng, tức
     hàng chục phút với một lô XML4 thật. Cách này O(số cột) mỗi dòng và chạy
     được cả ở chế độ ``write_only`` (nơi không thể truy cập lại ô đã ghi).
+
+    ``alerts`` (tuỳ chọn) là danh sách cờ bool CÙNG ĐỘ DÀI với ``values`` — ô
+    nào có cờ True thì tô NỀN đỏ. Nhận cờ đã tính sẵn thay vì một hàm predicate
+    vì caller (vd. sheet Summary) cần áp quy tắc theo TỪNG CỘT (một cột được
+    miễn tô đỏ bất kể giá trị) — quyết định đó phải làm trước khi giá trị tới
+    được hàm này. Hai lớp bảo vệ ĐỘC LẬP và có thể cùng áp lên một ô: chuỗi vừa
+    bắt đầu bằng ``=`` vừa bị đánh dấu cảnh báo thì vẫn giữ ``data_type="s"``
+    VÀ được tô nền đỏ. Ở ``write_only`` không thể quay lại sửa ô đã ghi, nên
+    style bắt buộc phải gán ngay lúc dựng ô — không có phương án "tô màu sau".
     """
 
     from openpyxl.cell import Cell
 
+    fill = _alert_fill() if alerts is not None else None
+    alerts = list(alerts) if alerts is not None else ()
+
     row = []
-    for value in values:
-        if isinstance(value, str) and value.startswith("="):
-            cell = Cell(worksheet=ws, column=1, row=1, value=value)
-            cell.data_type = "s"  # toạ độ thật do ws.append gán lại
-            row.append(cell)
-        else:
+    for i, value in enumerate(values):
+        is_formula = isinstance(value, str) and value.startswith("=")
+        is_alert = fill is not None and i < len(alerts) and alerts[i]
+        if not (is_formula or is_alert):
             row.append(value)
+            continue
+        cell = Cell(worksheet=ws, column=1, row=1, value=value)
+        if is_formula:
+            cell.data_type = "s"  # toạ độ thật do ws.append gán lại
+        if is_alert:
+            cell.fill = fill
+        row.append(cell)
     ws.append(row)
 
 

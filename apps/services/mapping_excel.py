@@ -23,7 +23,7 @@ Quy ước file (người dùng kiểm soát hoàn toàn, không hardcode trong 
 - Các cột còn lại được gắn thêm vào bản ghi nào khớp khoá.
 
 Mapping **không bao giờ ghi đè** dữ liệu sẵn có của bản ghi: cột trùng tên sẽ
-được đổi thành ``<tên>_MAP``. Ghi đè âm thầm lên ``Name_Method`` (do danh mục
+được đổi thành ``<tên>_MAP``. Ghi đè âm thầm lên ``TEN_DICH_VU`` (do danh mục
 điền) hay lên chính trường gốc trong XML là kiểu mất dữ liệu không ai phát
 hiện ra.
 """

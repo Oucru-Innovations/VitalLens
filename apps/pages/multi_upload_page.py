@@ -21,6 +21,7 @@ from apps.config import (
     ACCENT_BLUE,
     ACCENT_GREEN,
     ACCENT_PURPLE,
+    ACCENT_RED,
     API_UPLOAD_OWNER,
     API_UPLOAD_URL,
     API_BEARER_TOKEN,
@@ -41,7 +42,7 @@ from apps.services.upload_api import (
     sanitize_path_segment,
 )
 from apps.widgets import (
-    StyledButton, StatusBar, make_header, make_section,
+    StyledButton, StatusBar, ScrollableFrame, make_header, make_section,
     make_scrollable_listbox, get_sftp_uploader, run_upload_batch,
 )
 
@@ -86,14 +87,20 @@ class MultiUploadPage(tk.Frame):
         # path -> {"study": str, "patient": str, "data_type": str, "date": str, "manual": set[str]}
         self.parsed: dict[str, dict] = {}
         self.uploaded_log: list[tuple[str, str, str]] = []
+        # (tên file, data type, lý do lỗi) - file lỗi vẫn nằm lại trong bảng để
+        # người dùng sửa metadata rồi upload lại.
+        self.failed_log: list[tuple[str, str, str]] = []
 
-        make_header(self, controller, "Upload Nhiều File")
+        make_header(self, controller, "Upload File đã xử lý")
 
-        body = tk.Frame(self, bg=BG_MAIN)
-        body.pack(fill="both", expand=True)
+        # Toàn bộ nội dung nằm trong vùng cuộn: trên màn hình nhỏ các section
+        # (bảng metadata + danh sách đã upload) dễ tràn chiều dài cửa sổ.
+        scroller = ScrollableFrame(self, bg=BG_MAIN)
+        scroller.pack(fill="both", expand=True)
+        body = scroller.interior
 
         # === Section 1: Chọn file ===
-        s1 = make_section(body, "BƯỚC 1 — Chọn file (bất kỳ loại nào)")
+        s1 = make_section(body, "BƯỚC 1 — Chọn file (Chức năng này áp dụng cho dữ liệu PDF, Xray, Shimmer, Ultrasound, CT, MRI,... cho nghiên cứu 13NV)")
 
         btn_row = tk.Frame(s1, bg=BG_CARD)
         btn_row.pack(fill="x", padx=15, pady=(0, 5))
@@ -176,6 +183,20 @@ class MultiUploadPage(tk.Frame):
 
         # === Section 4: Đã upload ===
         s4 = make_section(body, "Đã upload hoàn thành")
+
+        count_row = tk.Frame(s4, bg=BG_CARD)
+        count_row.pack(fill="x", padx=15, pady=(0, 6))
+        self.ok_count_lbl = tk.Label(
+            count_row, text="Thành công: 0 file", font=("Helvetica", 11, "bold"),
+            bg=BG_CARD, fg=ACCENT_GREEN,
+        )
+        self.ok_count_lbl.pack(side="left")
+        self.fail_count_lbl = tk.Label(
+            count_row, text="Thất bại: 0 file", font=("Helvetica", 11, "bold"),
+            bg=BG_CARD, fg=FG_DIM,
+        )
+        self.fail_count_lbl.pack(side="left", padx=(20, 0))
+
         uploaded_frame, self.uploaded_listbox = make_scrollable_listbox(
             s4, frame_bg=BG_CARD, height=5, font=("Courier", 10),
             bg=BG_INPUT, fg=FG_DIM, borderwidth=0, highlightthickness=0,
@@ -192,7 +213,7 @@ class MultiUploadPage(tk.Frame):
 
     def _pick_files(self):
         files = filedialog.askopenfilenames(
-            title="Chọn file (bất kỳ loại nào)",
+            title="Chọn file 13NV: PDF, Xray, ECG, Ultrasound, CT, MRI,...",
             filetypes=[("Tất cả", "*.*")],
         )
         if not files:
@@ -273,7 +294,21 @@ class MultiUploadPage(tk.Frame):
     def _refresh_uploaded_log(self):
         self.uploaded_listbox.delete(0, "end")
         for name, type_label, dest in self.uploaded_log:
-            self.uploaded_listbox.insert("end", f"  {name}   [{type_label}] -> {dest}")
+            self.uploaded_listbox.insert("end", f"  ✓ {name}   [{type_label}] -> {dest}")
+        for name, type_label, reason in self.failed_log:
+            self.uploaded_listbox.insert("end", f"  ✗ {name}   [{type_label}] -> {reason}")
+            # Tô đỏ riêng dòng vừa chèn ("end" không dùng được cho itemconfig).
+            self.uploaded_listbox.itemconfig(
+                self.uploaded_listbox.size() - 1, foreground=ACCENT_RED
+            )
+
+        ok_count = len(self.uploaded_log)
+        fail_count = len(self.failed_log)
+        self.ok_count_lbl.config(text=f"Thành công: {ok_count} file")
+        self.fail_count_lbl.config(
+            text=f"Thất bại: {fail_count} file",
+            fg=ACCENT_RED if fail_count else FG_DIM,
+        )
 
     # ================================================================
     # BẢNG - SỬA TAY (inline edit)
@@ -377,6 +412,10 @@ class MultiUploadPage(tk.Frame):
 
         sftp_jobs = [UploadJob(label=key, files=paths) for key, paths in sftp_groups.items()]
 
+        # Lỗi của lần upload trước không còn ý nghĩa khi bắt đầu lô mới.
+        self.failed_log.clear()
+        self._refresh_uploaded_log()
+
         if sftp_jobs:
             if not SFTP_BUFFER_PATH:
                 messagebox.showwarning(
@@ -387,6 +426,7 @@ class MultiUploadPage(tk.Frame):
                 self, self.upload_btn, self.status,
                 get_sftp_uploader(self, SFTP_BUFFER_PATH), sftp_jobs,
                 on_job_done=self._on_sftp_job_uploaded,
+                on_job_failed=self._on_job_failed,
                 on_batch_done=lambda ok: self._start_http_batch(http_files),
             )
         else:
@@ -427,7 +467,14 @@ class MultiUploadPage(tk.Frame):
         run_upload_batch(
             self, self.upload_btn, self.status, get_uploader, jobs,
             on_job_done=self._on_http_job_uploaded,
+            on_job_failed=self._on_job_failed,
         )
+
+    def _on_job_failed(self, job: UploadJob, message: str) -> None:
+        for path in job.files:
+            log.warning("Upload thất bại %s: %s", path, message)
+            self._mark_failed(path, message)
+        self._refresh_uploaded_log()
 
     def _on_http_job_uploaded(self, job: UploadJob) -> None:
         for path in job.files:
@@ -453,6 +500,12 @@ class MultiUploadPage(tk.Frame):
         if path in self.files:
             self.files.remove(path)
         self.parsed.pop(path, None)
+
+    def _mark_failed(self, path: str, reason: str) -> None:
+        # File lỗi KHÔNG bị gỡ khỏi self.files/self.parsed: người dùng sửa lại
+        # metadata trong bảng rồi bấm Upload lần nữa.
+        type_label = self.parsed.get(path, {}).get("data_type", "")
+        self.failed_log.append((os.path.basename(path), type_label, reason))
 
 
 __all__ = ["MultiUploadPage"]

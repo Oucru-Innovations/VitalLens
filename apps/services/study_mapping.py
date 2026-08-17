@@ -1,4 +1,4 @@
-"""File Excel danh sách nghiên cứu — gắn ``USUBJID`` và lọc theo khoảng ngày.
+"""File Excel danh sách nghiên cứu — gắn mã nghiên cứu và lọc theo khoảng ngày.
 
 Đây là loại mapping thứ BA trong dự án, đừng lẫn với hai loại kia:
 
@@ -15,7 +15,10 @@ Vai trò              lọc Include/Exclude   chỉ gắn thêm cột      gắn
 
 Quy ước file (dòng 1 là tiêu đề, thứ tự cột không quan trọng):
 
-- ``USUBJID`` — mã nghiên cứu, là cột DUY NHẤT được đưa vào file xuất ra.
+- ``USUBJID`` — mã nghiên cứu, là cột DUY NHẤT được đưa vào file xuất ra (dưới
+  tên ``MA_NTG``: tên cột trong file xuất ra do ``xml_to_excel.STUDY_ID_COLUMN``
+  quyết định, tên tiêu đề mà người dùng phải đặt trong file mapping vẫn là
+  ``USUBJID``).
 - ``EMR_ID`` — định danh bệnh nhân, dùng để ghép với hồ sơ XML4 theo hai cách:
   khớp TOÀN BỘ với ``MA_LK``, hoặc khớp **10 ký tự cuối** với ``ID`` / ``ID_GOC``.
   Hai cách này được thử theo đúng thứ tự đó (xem ``xml_to_excel._match_study``).
