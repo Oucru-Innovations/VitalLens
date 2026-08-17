@@ -13,19 +13,20 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from apps.runtime_paths import bundle_dir, exe_dir
+
 log = logging.getLogger(__name__)
 
 
 def _resolve_app_dir() -> Path:
     """Return the application root directory.
 
-    Works correctly both during development and inside a PyInstaller EXE.
+    Works correctly during development, inside a PyInstaller EXE, and inside
+    a Nuitka binary (kể cả onefile — xem ``apps/runtime_paths.py``).
     """
 
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
     # config.py lives at apps/config.py → parent.parent is the repo root.
-    return Path(__file__).resolve().parent.parent
+    return exe_dir() or Path(__file__).resolve().parent.parent
 
 
 APP_DIR: Path = _resolve_app_dir()
@@ -121,6 +122,10 @@ def _load_dotenv_if_present(app_dir: Path) -> None:
     2. ``<app_dir>/.env`` rồi ``<app_dir>/env`` — cách cũ, giữ để bản cài sẵn
        của người dùng hiện tại không hỏng. Tên không dấu chấm là vì Windows
        Explorer từ chối tạo file bắt đầu bằng dấu chấm.
+    3. ``<bundle_dir>/.env`` — bản `.env` được NHÚNG vào binary lúc build
+       (``build_nuitka.bat``). Đứng CUỐI vì nó chỉ là giá trị mặc định xuất
+       xưởng: mọi file của người dùng ở trên, và biến môi trường OS, đều đè
+       lên được mà không phải build lại app.
 
     Existing ``os.environ`` values are NOT overridden (``override=False``),
     so OS-level environment variables always win over every file.
@@ -160,8 +165,15 @@ def _load_dotenv_if_present(app_dir: Path) -> None:
 
     from apps.services.user_config import USER_ENV_PATH
 
+    candidates = [USER_ENV_PATH, app_dir / ".env", app_dir / "env"]
+    bundled = bundle_dir()
+    if bundled is not None:
+        # dict.fromkeys: bản Nuitka standalone (không onefile) có
+        # bundle_dir() == app_dir → tránh nạp và log cùng một file hai lần.
+        candidates = list(dict.fromkeys(candidates + [bundled / ".env"]))
+
     loaded_any = False
-    for candidate in (USER_ENV_PATH, app_dir / ".env", app_dir / "env"):
+    for candidate in candidates:
         exists = candidate.is_file()
         _dbg(f"Check    : {candidate} -> {'FOUND' if exists else 'not found'}")
         if not exists:

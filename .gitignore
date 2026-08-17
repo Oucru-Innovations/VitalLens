@@ -18,9 +18,13 @@ env/
 # as a fallback, so it must be ignored to avoid leaking tokens.
 /env
 
-# PyInstaller build artifacts
+# PyInstaller / Nuitka build artifacts
 build/
 dist/
+dist_nuitka/
+*.build/
+*.dist/
+*.onefile-build/
 *.manifest
 *.spec.bak
 

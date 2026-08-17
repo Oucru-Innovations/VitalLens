@@ -12,3 +12,8 @@
 
 pyinstaller==6.21.0
 pyinstaller-hooks-contrib==2026.6
+
+# Nuitka: nhánh build onefile (build_nuitka.bat) — 1 file .exe duy nhất.
+# Cần thêm MSVC (Visual Studio Build Tools) hoặc clang trên máy build;
+# Nuitka tự tải ccache/dependency-walker khi có --assume-yes-for-downloads.
+nuitka==4.1.3
