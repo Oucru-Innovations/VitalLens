@@ -13,10 +13,11 @@ Mỗi cặp gồm 3 file:
     <csv_name>.csv          - metadata form
     <display_name>.meta.json - "sổ cái" của cặp (nguồn dữ liệu chuẩn)
 
-`meta.json` là nguồn chuẩn để khôi phục state: nó ghi tên file pdf/csv, form
-đã nhập, các vùng tô đen, file gốc, cờ đã-gửi từng file (phục vụ retry không
-gửi trùng) và nhật ký upload (`attempts`, `last_error`, `last_attempt_at`,
-`uploaded_at`) để hiển thị "cặp nào chưa lên và vì sao" sau khi mở lại app.
+`meta.json` là nguồn chuẩn để khôi phục state: nó ghi UUID của cặp, tên file
+pdf/csv, form đã nhập, các vùng tô đen, file gốc, cờ đã-gửi từng file (phục vụ
+retry không gửi trùng) và nhật ký upload (`attempts`, `last_error`,
+`last_attempt_at`, `uploaded_at`) để hiển thị "cặp nào chưa lên và vì sao" sau
+khi mở lại app.
 Quét thư mục = tìm mọi `*.meta.json` rồi dựng lại danh sách.
 
 Module này cũng ghi luôn file CSV metadata (`write_csv`): backend loại file
@@ -40,9 +41,15 @@ UPLOADED = "uploaded"
 _WORKSPACE_FILE = ".vitallens_workspace.json"
 _META_SUFFIX = ".meta.json"
 
-# Cột nối CSV với PDF của cùng một cặp; cũng là thứ giữ cho nội dung CSV không
-# bao giờ trùng nhau (xem `write_csv`).
+# Cột nối CSV với PDF của cùng một cặp. ``export_id`` là UUID bền vững của cặp
+# và là nonce chống trùng hash giữa cả những workspace/máy khác nhau.
 CSV_FILE_COLUMN = "file_name"
+CSV_EXPORT_ID_COLUMN = "export_id"
+
+
+class CsvMigrationError(RuntimeError):
+    """CSV cũ không thể được chuẩn hoá an toàn trước khi upload."""
+
 
 # Ký tự đầu ô mà Excel/Sheets hiểu là công thức → phải "thoát" khi ghi CSV.
 _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
@@ -147,9 +154,20 @@ def _load_folder(folder: str) -> List[dict]:
             log.warning("Bỏ qua meta thiếu file cặp: %s", meta_path)
             continue
 
+        export_id = meta.get("id") or ""
+        if not export_id:
+            # Meta rất cũ có thể chưa mang id. Nếu lần migration trước đã ghi
+            # CSV rồi nhưng app tắt trước lúc ghi meta, nhận lại chính UUID đó
+            # để retry không tạo một hash mới ở mỗi lần khởi động.
+            try:
+                export_id = _peek_csv_export_id(csv_path)
+            except (OSError, csv.Error, UnicodeError, CsvMigrationError) as e:
+                log.warning("Chưa đọc được export_id từ CSV %s: %s", csv_path, e)
+        export_id = export_id or uuid.uuid4().hex
+
         exports.append(
             {
-                "id": meta.get("id") or uuid.uuid4().hex,
+                "id": export_id,
                 "original_file": meta.get("original_file", ""),
                 "pdf_path": pdf_path,
                 "csv_path": csv_path,
@@ -222,49 +240,146 @@ def _csv_safe(value: str) -> str:
     return value
 
 
-def write_csv(output_path: str, form: dict, pdf_name: str) -> None:
-    """Ghi (atomic) CSV metadata, kèm cột `file_name` = tên PDF của cặp.
+def _read_csv_rows(path: str) -> tuple[list[str], list[dict]]:
+    """Đọc nguyên CSV để migration không làm mất cột/dòng ngoài ``form_data``."""
+
+    with open(path, encoding="utf-8-sig", newline="") as fh:
+        reader = csv.DictReader(fh)
+        fieldnames = list(reader.fieldnames or [])
+        rows = list(reader)
+    if not fieldnames:
+        raise CsvMigrationError("CSV không có header")
+    if not rows:
+        raise CsvMigrationError("CSV không có dòng dữ liệu")
+    if any(None in row for row in rows):
+        raise CsvMigrationError("CSV có ô thừa so với header")
+    return fieldnames, rows
+
+
+def _csv_export_id_from_rows(rows: list[dict]) -> str:
+    """Lấy UUID đã có trong các dòng; báo lỗi nếu chúng tự mâu thuẫn."""
+
+    ids = {
+        str(row.get(CSV_EXPORT_ID_COLUMN) or "").strip()
+        for row in rows
+        if str(row.get(CSV_EXPORT_ID_COLUMN) or "").strip()
+    }
+    if len(ids) > 1:
+        raise CsvMigrationError("CSV chứa nhiều export_id khác nhau")
+    return next(iter(ids), "")
+
+
+def _peek_csv_export_id(path: str) -> str:
+    """Lấy UUID đã có trong CSV mà không thay đổi file."""
+
+    _fieldnames, rows = _read_csv_rows(path)
+    return _csv_export_id_from_rows(rows)
+
+
+def _write_csv_rows(output_path: str, fieldnames: list[str], rows: list[dict]) -> None:
+    """Ghi atomic các dòng CSV, đồng thời áp dụng chống formula injection."""
+
+    tmp = f"{output_path}.__tmp__"
+    try:
+        with open(tmp, "w", newline="", encoding="utf-8-sig") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in rows:
+                safe_row = {
+                    key: _csv_safe("" if value is None else str(value))
+                    for key, value in row.items()
+                }
+                writer.writerow(safe_row)
+        os.replace(tmp, output_path)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def write_csv(output_path: str, form: dict, pdf_name: str, export_id: str) -> None:
+    """Ghi atomic CSV metadata kèm tên PDF và UUID bền vững của cặp.
 
     Backend loại file trùng theo **hash nội dung** (không nhìn tên file) và
-    không sửa được. Không có cột này, hai cặp cùng bệnh nhân + cùng type + cùng
-    các mốc ngày cho ra CSV giống hệt nhau từng byte → server nuốt mất CSV thứ
-    hai: PDF lên được, metadata bị SÓT mà không ai báo lỗi. `pdf_name` là duy
-    nhất trong kho (xem `UploadPDFPage._unique_export_names`) nên mỗi CSV có
-    một nội dung riêng, đồng thời cho backend biết dòng này thuộc PDF nào.
+    không sửa được. Không có các trường identity này, hai cặp cùng bệnh nhân +
+    cùng type + cùng các mốc ngày cho ra CSV giống hệt nhau từng byte → server
+    nuốt mất CSV thứ hai: PDF lên được, metadata bị SÓT mà không ai báo lỗi.
+    ``file_name`` nối metadata với đúng PDF; ``export_id`` là UUID lưu cả trong
+    meta nên bảo đảm nội dung khác nhau ngay cả khi hai workspace/máy tạo cùng
+    tên file.
     """
 
-    row = dict(form, **{CSV_FILE_COLUMN: pdf_name})
-    safe_row = {k: _csv_safe(str(v)) for k, v in row.items()}
-    tmp = f"{output_path}.__tmp__"
-    with open(tmp, "w", newline="", encoding="utf-8-sig") as fh:
-        writer = csv.DictWriter(fh, fieldnames=list(row.keys()))
-        writer.writeheader()
-        writer.writerow(safe_row)
-    os.replace(tmp, output_path)
+    if not export_id:
+        raise ValueError("export_id không được để trống")
+    row = dict(
+        form,
+        **{
+            CSV_FILE_COLUMN: pdf_name,
+            CSV_EXPORT_ID_COLUMN: export_id,
+        },
+    )
+    _write_csv_rows(output_path, list(row.keys()), [row])
 
 
-def ensure_csv_file_name(export: dict) -> bool:
-    """Vá CSV lưu bằng bản cũ (chưa có cột `file_name`). True = đã ghi lại.
+def ensure_csv_identity(export: dict) -> bool:
+    """Vá CSV cũ thiếu ``file_name``/``export_id``. True = đã ghi lại.
 
-    Những cặp còn nằm sẵn trong `pending/` từ trước khi có cột này vẫn dính lỗi
-    trùng hash, nên vá ngay trước lúc gửi thay vì bắt người dùng lưu lại tay.
+    False nghĩa là CSV đã đủ hai cột. Nếu không thể đọc/ghi hoặc meta thiếu dữ
+    liệu để vá, hàm ném :class:`CsvMigrationError`; caller phải dừng upload cặp
+    đó, không được âm thầm gửi CSV cũ có nguy cơ bị backend bỏ qua.
+
+    Đánh đổi đã cân nhắc: nếu một CSV cũ THỰC RA đã tới server mà app không kịp
+    ghi nhận (``ReadTimeout``), lần gửi lại sau khi vá sẽ mang nội dung mới nên
+    server không nhận ra trùng → sinh bản ghi lặp, thay vì bị nuốt im lặng như
+    trước. Chấp nhận được vì endpoint vốn không có idempotency key: chính sách
+    retry (xem ``upload_api``) đã đặt quyền quyết định gửi lại vào tay người
+    dùng đúng cho những trường hợp này, và mất metadata thì tệ hơn ghi lặp.
     """
 
     path = export.get("csv_path") or ""
-    form = export.get("form_data") or {}
     pdf_name = os.path.basename(export.get("pdf_path") or "")
-    if not path or not form or not pdf_name:
-        return False
+    missing_meta = [
+        name
+        for name, value in (
+            ("csv_path", path),
+            ("pdf_path", pdf_name),
+        )
+        if not value
+    ]
+    if missing_meta:
+        raise CsvMigrationError(
+            "thiếu dữ liệu meta: " + ", ".join(missing_meta)
+        )
     try:
-        with open(path, encoding="utf-8-sig", newline="") as fh:
-            header = next(csv.reader(fh), [])
-        if CSV_FILE_COLUMN in header:
+        fieldnames, rows = _read_csv_rows(path)
+        csv_export_id = _csv_export_id_from_rows(rows)
+        export_id = export.get("id") or csv_export_id or uuid.uuid4().hex
+        export["id"] = export_id
+
+        required = (CSV_FILE_COLUMN, CSV_EXPORT_ID_COLUMN)
+        missing_columns = [name for name in required if name not in fieldnames]
+        expected_pdf_name = _csv_safe(pdf_name)
+        expected_export_id = _csv_safe(export_id)
+        identity_matches = all(
+            row.get(CSV_FILE_COLUMN) == expected_pdf_name
+            and row.get(CSV_EXPORT_ID_COLUMN) == expected_export_id
+            for row in rows
+        )
+        if not missing_columns and identity_matches:
             return False
-        write_csv(path, form, pdf_name)
-    except OSError as e:
-        log.warning("Không vá được cột %s cho %s: %s", CSV_FILE_COLUMN, path, e)
-        return False
-    log.info("Đã vá cột %s cho CSV cũ: %s", CSV_FILE_COLUMN, path)
+        fieldnames.extend(missing_columns)
+        for row in rows:
+            row[CSV_FILE_COLUMN] = pdf_name
+            row[CSV_EXPORT_ID_COLUMN] = export_id
+        _write_csv_rows(path, fieldnames, rows)
+    except CsvMigrationError:
+        raise
+    except (OSError, csv.Error, UnicodeError, ValueError) as e:
+        log.warning("Không chuẩn hoá được CSV %s: %s", path, e)
+        raise CsvMigrationError(f"không đọc/ghi được {path}: {e}") from e
+    log.info("Đã chuẩn hoá identity CSV (thiếu=%s): %s", missing_columns, path)
     return True
 
 # =====================================================================
@@ -296,6 +411,8 @@ __all__ = [
     "PENDING",
     "UPLOADED",
     "CSV_FILE_COLUMN",
+    "CSV_EXPORT_ID_COLUMN",
+    "CsvMigrationError",
     "pending_dir",
     "uploaded_dir",
     "ensure_dirs",
@@ -306,7 +423,7 @@ __all__ = [
     "load_workspace",
     "save_workspace",
     "write_csv",
-    "ensure_csv_file_name",
+    "ensure_csv_identity",
 ]
 
 
@@ -327,33 +444,85 @@ if __name__ == "__main__":
         ensure_dirs(_base)
         _pending = pending_dir(_base)
 
-        # Hai cặp cùng form nhưng khác PDF → nội dung CSV PHẢI khác nhau, nếu
-        # không backend (loại trùng theo hash) sẽ nuốt mất cặp thứ hai.
+        # Hai workspace/máy có thể tạo cùng form VÀ cùng tên PDF. UUID của cặp
+        # vẫn phải làm nội dung khác nhau để backend không nuốt mất bản thứ hai.
         _a = os.path.join(_pending, "a.csv")
         _b = os.path.join(_pending, "b.csv")
-        write_csv(_a, _FORM, "HematologyImage_P001_1_.pdf")
-        write_csv(_b, _FORM, "HematologyImage_P001_2_.pdf")
+        _pdf_name = "HematologyImage_P001_18.08.2026.12.00.00_.pdf"
+        _id_a = "a" * 32
+        _id_b = "b" * 32
+        write_csv(_a, _FORM, _pdf_name, _id_a)
+        write_csv(_b, _FORM, _pdf_name, _id_b)
         _first = open(_a, "rb").read()
         assert _first != open(_b, "rb").read(), "CSV trùng nội dung"
         assert b"13NV" in _first, "thiếu cột SID"
-        assert b"HematologyImage_P001_1_.pdf" in _first, "thiếu cột file_name"
+        assert _pdf_name.encode() in _first, "thiếu cột file_name"
+        assert _id_a.encode() in _first, "thiếu cột export_id"
+
+        # UUID đi đủ vòng meta -> restart -> move, không sinh lại giữa retry.
+        _pair_pdf = os.path.join(_pending, "pair.pdf")
+        with open(_pair_pdf, "wb") as _fh:
+            _fh.write(b"pdf")
+        _pair = {
+            "id": _id_a,
+            "display_name": "pair",
+            "pdf_path": _pair_pdf,
+            "csv_path": _a,
+            "form_data": _FORM,
+        }
+        write_meta(_pending, _pair)
+        _pending_rows, _uploaded_rows = read_all(_base)
+        assert _pending_rows[0]["id"] == _id_a, "restart làm đổi export_id"
+        move_pair(_pending_rows[0], uploaded_dir(_base))
+        _pending_rows, _uploaded_rows = read_all(_base)
+        assert not _pending_rows and _uploaded_rows[0]["id"] == _id_a
 
         # Chống CSV formula injection khi mở bằng Excel/Sheets.
         _c = os.path.join(_pending, "c.csv")
-        write_csv(_c, dict(_FORM, patient_code="=cmd|'/c calc'!A1"), "x.pdf")
+        write_csv(
+            _c,
+            dict(_FORM, patient_code="=cmd|'/c calc'!A1"),
+            "x.pdf",
+            "c" * 32,
+        )
         assert b",'=cmd" in open(_c, "rb").read(), "thiếu prefix chống công thức"
 
-        # CSV bản cũ (thiếu cột file_name) phải được vá, và chỉ vá một lần.
+        # CSV bản cũ phải được vá đủ identity, và chỉ vá một lần.
         _old = os.path.join(_pending, "old.csv")
         with open(_old, "w", newline="", encoding="utf-8-sig") as _fh:
-            _fh.write("date,patient_code" + chr(10) + "18-08-2026,P001" + chr(10))
+            _fh.write(
+                "date,patient_code" + chr(10)
+                + "18-08-2026,P001" + chr(10)
+                + "19-08-2026,P002" + chr(10)
+            )
         _exp = {
+            "id": "d" * 32,
             "csv_path": _old,
             "pdf_path": os.path.join(_pending, "old.pdf"),
             "form_data": _FORM,
         }
-        assert ensure_csv_file_name(_exp) is True, "không vá CSV cũ"
-        assert b"old.pdf" in open(_old, "rb").read(), "vá xong vẫn thiếu file_name"
-        assert ensure_csv_file_name(_exp) is False, "vá lặp lần hai"
+        assert ensure_csv_identity(_exp) is True, "không vá CSV cũ"
+        _migrated = open(_old, "rb").read()
+        assert b"old.pdf" in _migrated, "vá xong vẫn thiếu file_name"
+        assert b"d" * 32 in _migrated, "vá xong vẫn thiếu export_id"
+        with open(_old, encoding="utf-8-sig", newline="") as _fh:
+            assert len(list(csv.DictReader(_fh))) == 2, "migration làm mất dòng"
+        assert ensure_csv_identity(_exp) is False, "vá lặp lần hai"
+
+        # Crash sau khi ghi CSV nhưng trước meta: lần sau phải nhận lại UUID CSV.
+        _partial = dict(_exp, id="")
+        assert ensure_csv_identity(_partial) is False
+        assert _partial["id"] == "d" * 32, "không nhận lại id từ CSV"
+
+        # CSV rỗng/hỏng phải báo lỗi rõ, không được giả vờ là đã sẵn sàng.
+        _empty = os.path.join(_pending, "empty.csv")
+        with open(_empty, "w", newline="", encoding="utf-8-sig") as _fh:
+            _fh.write("date,patient_code" + chr(10))
+        try:
+            ensure_csv_identity(dict(_exp, csv_path=_empty))
+        except CsvMigrationError:
+            pass
+        else:
+            raise AssertionError("CSV rỗng không báo lỗi migration")
 
     print("export_store OK")

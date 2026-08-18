@@ -17,10 +17,11 @@ VitalLens is a Python/Tkinter desktop app for medical data processing. The proje
 VitalLens/
 ├── main.py                  # Entry point (sets Paddle env flags before UI)
 ├── requirements.txt         # Runtime deps (pinned)
-├── requirements-build.txt   # Runtime + PyInstaller (build machines only)
+├── requirements-build.txt   # Runtime + PyInstaller + Nuitka
 ├── build_exe.spec           # PyInstaller spec (onedir)
-├── build.bat                # One-click build script
-├── .env.example             # Template for secrets (the ONLY config file that ships)
+├── build.bat                # Fast local/debug build (PyInstaller onedir)
+├── build_nuitka.bat         # Release build (Nuitka onefile)
+├── .env.example             # Tracked template only; no real credential
 ├── icon.ico
 ├── README.md
 ├── database/
@@ -67,7 +68,7 @@ VitalLens/
 ### Three-Layer Architecture
 
 - **pages/** — UI only (tkinter). No direct file I/O, no socket calls.
-- **services/** — Pure Python business logic. Testable with pytest, reusable from CLI. All I/O goes through `StorageBackend` so local/SFTP share the same code path.
+- **services/** — Pure Python business logic, reusable from CLI and suitable for direct self-checks. The repo has no pytest suite. All I/O goes through `StorageBackend` so local/SFTP share the same code path.
 - **processing/** — CPU-bound work (OCR, PDF render). No UI or storage knowledge.
 
 ## Data Flow
@@ -105,6 +106,7 @@ Fields that drive retry behavior:
 
 | Field | Meaning |
 | --- | --- |
+| `id` | Stable random UUID for the pair; also written as CSV `export_id` |
 | `pdf_sent` / `csv_sent` | Per-file delivery flags — a retry skips whatever already landed, so a half-sent pair never uploads the same file twice |
 | `attempts` | How many times this pair has been tried |
 | `last_error` | Why the last attempt failed (shown in the list and status bar) |
@@ -112,6 +114,26 @@ Fields that drive retry behavior:
 
 A batch **does not stop at the first failure** — every ticked pair is attempted,
 and a report at the end lists what went up and what did not, with reasons.
+
+#### The CSV carries a stable pair identity
+
+The backend deduplicates uploads by **content hash and ignores the filename**,
+and it cannot be changed. Two pairs for the same patient, type and dates would
+otherwise produce a byte-identical CSV, and the server silently drops the second
+one — the PDF lands, its metadata does not.
+
+`export_store.write_csv` therefore appends two fields: `file_name` links the row
+to its PDF, while `export_id` is a random UUID stored in `meta.json` and makes
+the bytes globally distinct even if another workspace or machine creates the
+same filename at the same second. Pairs saved before these fields existed are
+patched in place by `ensure_csv_identity` immediately before upload. If that
+rewrite fails (for example, a read-only file), the pair stays pending with an
+actionable error instead of sending the old CSV and risking silent loss.
+
+The UI requires **SID** and **Patient Code**; `Type` also becomes the filename
+prefix. `python -m apps.services.export_store` self-checks CSV identity,
+migration and formula escaping (it is part of `ci.yml`); the required-field and
+filename rules are enforced by the page itself.
 
 ### XML4 → Excel — catalogue lookup & filter
 
@@ -229,13 +251,13 @@ changes the bytes and therefore the fingerprint.
 | --- | --- | --- |
 | Lab PDF | User-drawn regions are rasterized over in black — the underlying text is gone, not just covered | `services/pdf_redact.py` |
 | X-Ray | Burned-in text detected via PaddleOCR and painted out; DICOM metadata anonymized | `processing/xray.py` |
-| XML → Excel | `MA_BS_DOC_KQ` omitted when picking sheet columns (it *is* decoded and held in memory — see caveat below); only `Include` services reach the main sheet; with a study list, `ID`/`MA_LK` give way to `STUDY_ID` on the matched sheets | `processing/xml_to_excel.py` |
-| CSV export | Cells starting with `= + - @` are prefixed with `'` to block formula injection in Excel/Sheets | `pages/upload/page.py` |
+| XML → Excel | `MA_BS_DOC_KQ` omitted when picking sheet columns (it *is* decoded and held in memory — see caveat below); only `Include` services reach the main sheet; with a study list, `ID`/`MA_LK` give way to `MA_NTG` on the matched sheets | `processing/xml_to_excel.py` |
+| CSV export | Cells starting with `= + - @` are prefixed with `'` to block formula injection in Excel/Sheets | `services/export_store.py` |
 
 ## Requirements
 
 - **OS**: Windows (primary target for running and building)
-- **Python**: 3.12 (pins in `requirements.txt` are verified on 3.12.13)
+- **Python**: 3.12 (pins last audited on 2026-08-18 with Python 3.12.13)
 - **Environment**: conda or venv — both work. Everything installs via pip, so neither is smaller than the other.
 
 Dependencies are split so a runtime machine never pulls the build toolchain:
@@ -243,7 +265,7 @@ Dependencies are split so a runtime machine never pulls the build toolchain:
 | File | Contents | Install when |
 | --- | --- | --- |
 | `requirements.txt` | Runtime deps, pinned with `==` | Running from source |
-| `requirements-build.txt` | The above **plus** PyInstaller | Building the EXE |
+| `requirements-build.txt` | The above **plus** PyInstaller and Nuitka | Building the EXE |
 
 ## Setup
 
@@ -268,21 +290,37 @@ pip install -r requirements-build.txt
 Versions are pinned so two builds made months apart produce the same bundle.
 Only directly-used packages are pinned; pip resolves the rest.
 
-Two entries are worth knowing about:
+The pins were checked against the latest stable releases on 2026-08-18. Two
+deliberate compatibility ceilings and one removed package matter:
 
-- **`opencv-python-headless`** — no package declares OpenCV as a dependency, but `paddlex` imports `cv2` in 47 files, so it must be pinned explicitly. The `headless` variant is used because this is a Tkinter app that never opens an OpenCV window (the previously-installed `opencv-contrib-python` cost ~121 MB versus roughly a third of that).
+- **`opencv-contrib-python==4.10.0.84`** — OpenCV 5 exists, but PaddleOCR
+  3.7 pulls `paddlex[ocr-core]`, which requires this exact wheel. Do not add a
+  headless OpenCV wheel alongside it: both distributions install the same `cv2`
+  namespace and pip would still retain `contrib` for PaddleX.
+- **`numpy==2.3.5`** — newer NumPy releases exist, but PaddleX 3.7.2 requires `numpy>=1.24,<2.4`.
 - **`gdcm` was removed** — the PyPI package by that name is not the official GDCM binding and fails to import (`DLL load failed while importing _gdcmswig`), so `pydicom` reported it unavailable the whole time. For full codec coverage in one package, use `python-gdcm` instead.
+
+An existing environment created from an older requirements file may still have
+both OpenCV wheels installed; `pip install -r ...` does not remove an orphaned
+package. Prefer recreating that environment. To repair it in place, uninstall
+both OpenCV distributions first, then reinstall the requirements so only
+`opencv-contrib-python` returns.
 
 ### DICOM compression support
 
-`pydicom` cannot decode compressed pixel data on its own. The pinned set covers
-**JPEG baseline/lossless** via `pylibjpeg-libjpeg`. JPEG2000 and RLE have **no
-decoder** in the current set — `ds.pixel_array` will raise on such files. If your
-X-rays use them, uncomment these in `requirements.txt`:
+The pinned set currently provides:
+
+- JPEG baseline/extended and JPEG2000 through Pillow;
+- JPEG baseline/lossless and JPEG-LS through `pylibjpeg-libjpeg`;
+- RLE Lossless through pydicom's built-in Python decoder.
+
+The optional packages below are alternative/native backends, not prerequisites
+for basic JPEG2000 or RLE support. If enabled, their modules and distribution
+metadata must also be added to both packaging configurations:
 
 ```text
-pylibjpeg-openjpeg==2.5.0    # JPEG2000 — common for CR/DX
-pylibjpeg-rle==2.2.0         # RLE Lossless
+pylibjpeg-openjpeg==2.5.0    # alternative JPEG2000 backend
+pylibjpeg-rle==2.2.0         # alternative native RLE backend
 ```
 
 Check what your data actually uses before deciding:
@@ -308,21 +346,28 @@ Runtime defaults live in `apps/config.py` (`Settings` dataclass). Secrets and pe
 
 At startup `apps/config.py` loads **every** file below, in this order, into `os.environ` without overriding what is already set — so the first file to define a key wins, and OS-level env vars beat all of them:
 
-1. `%APPDATA%\VitalLens\.env` — per-user config written by the in-app settings dialog. Lives **outside** the app folder, so it survives unzipping a new release over the old one and does not travel when someone copies the app folder to a colleague. (`~/.config/VitalLens/.env` off Windows.)
+1. `%APPDATA%\VitalLens\.env` — per-user config written by the in-app settings dialog. Lives **outside** the app folder, so it survives replacing the EXE and does not travel when someone copies the app folder to a colleague. (`~/.config/VitalLens/.env` off Windows.)
 2. `<app root>\.env` — the original location, still read for existing installs.
 3. `<app root>\env` — fallback, handy on Windows where Explorer refuses to create filenames starting with a dot.
+4. `<bundle root>\.env` — only present when a manual Nuitka build deliberately embeds the repo-root `.env`; it has the lowest file priority.
 
-When `python-dotenv` is not available (common in PyInstaller bundles), a built-in fallback parser reads the file directly.
+When `python-dotenv` is not available in a packaged build, a built-in fallback parser reads the file directly.
 
 **App root** means:
 - During development (`python main.py`): the repo root (same folder as `main.py`).
-- In the packaged EXE: the folder containing `VitalLens.exe` (i.e. `dist\VitalLens\`).
+- In either packaged build: the folder containing the EXE. For Nuitka onefile,
+  bundled data is extracted elsewhere and is represented separately as
+  `<bundle root>`.
 
-### Setup (same steps for developers and end users)
+### Setup
 
-**No release artifact ever contains a real credential** — builds ship `.env.example` only, and `build.bat` fails if a `.env` reaches `dist\`.
+**Official GitHub release artifacts contain no credential.** The release workflow
+builds on a clean CI runner and checks again immediately before compilation.
+`build_nuitka.bat` now refuses to run when the repo root contains `.env`. A
+controlled internal build can explicitly opt in with `VITALLENS_EMBED_ENV=1`,
+but its value is extractable and that EXE must never be published.
 
-End users do not edit any file: run the app, click **⚙ Cấu hình kết nối** at the bottom of the home page, fill in server address + token, save, restart. That writes `%APPDATA%\VitalLens\.env` (see `apps/services/user_config.py`). An `http://` address to anything but localhost is warned about and requires a second click — the bearer token would otherwise travel in cleartext.
+End users normally do not edit a file by hand: run the app, click **⚙ Cấu hình kết nối** at the bottom of the home page, fill in server address + token, save, restart. That writes `%APPDATA%\VitalLens\.env` (see `apps/services/user_config.py`). An `http://` address to anything but localhost is warned about and requires a second click — the bearer token would otherwise travel in cleartext.
 
 Editing a file by hand still works, e.g. when running from source:
 
@@ -352,7 +397,7 @@ Important keys:
 - `API_UPLOAD_OWNER` — Default value pre-filled in the owner-email prompt.
 - `SFTP_DEMO_MODE=true` — Use local folders instead of a real SFTP server.
 - `SFTP_HOST`, `SFTP_PORT`, `SFTP_PATH` — SFTP connection settings.
-- `UPDATE_MANIFEST_URL` — Optional URL of a small public JSON (`{"version": "0.3.0", "url": "..."}`). The home page then shows "a new version is available" with a download link. The app never downloads or installs anything itself. Unset (default) = no outbound request at all.
+- `UPDATE_MANIFEST_URL` — Optional URL of a small public JSON (`{"version": "0.4.0", "url": "..."}`). The home page then shows "a new version is available" with a download link. The app never downloads or installs anything itself. Unset (default) = no outbound request at all.
 
 OS-level environment variables win over `.env` (`override=False`), which is handy
 for a temporary override without editing the file.
@@ -362,7 +407,25 @@ for a temporary override without editing the file.
 - `.env` / `env` are gitignored. Never commit real tokens. Share `.env.example` only.
 - Tokens are issued **per user**, not shared — one leak revokes one account.
 - The app never logs secret values. `config_debug.log` is written **only** when `VITALLENS_DEBUG_CONFIG=1` is set, and redacts secrets to a length.
-- `build.bat` refuses to finish if `.env`, `env`, or `config_debug.log` is found in the dist folder.
+- `build.bat` rejects loose secret files in the PyInstaller dist folder;
+  `build_nuitka.bat` rejects repo-root `.env` by default, and CI asserts it is
+  absent immediately before compilation.
+
+`%APPDATA%\VitalLens\.env` is plaintext and therefore readable, editable, and
+deletable by the same Windows account that runs VitalLens. There is no Nuitka
+option or file ACL that can simultaneously let an app running as that user read
+the token while making it impossible for that user to change it. DPAPI or
+Windows Credential Manager would hide plaintext at rest and protect a copied
+file from another account/machine, but code running as the same logged-in user
+can still retrieve the secret and the user can still remove or replace it. For
+a hostile-local-user threat model, use server-side identity (SSO/OAuth/device
+certificate) and short-lived scoped credentials instead of a permanent secret
+inside the client.
+
+If that file is edited or deleted, VitalLens does not somehow restore/protect
+it: the next restart uses the changed value, falls back to a lower-priority
+config, or enters demo mode when no upload URL remains. Re-enter the settings;
+if tampering may have exposed a token, revoke and reissue it server-side.
 
 Full procedures for issuing, rotating, and revoking tokens — plus the leaked-token
 incident checklist — are in **[docs/RUNBOOK-secrets.md](docs/RUNBOOK-secrets.md)**.
@@ -377,7 +440,7 @@ conda activate vitallens
 
 Ensure PaddleOCR models are downloaded before building (run the app once, or let `paddlex` download them automatically to `%USERPROFILE%\.paddlex\official_models`).
 
-### Quick Build
+### Fast local/debug build (PyInstaller onedir)
 
 ```powershell
 conda activate vitallens
@@ -395,6 +458,23 @@ The script automatically:
 The PyInstaller step also verifies the catalogue fingerprint and aborts on
 mismatch, so this happens before anything else runs.
 
+### Release build (Nuitka onefile)
+
+```powershell
+conda activate vitallens
+build_nuitka.bat
+```
+
+Nuitka compiles to a **single** `dist_nuitka\VitalLens.exe`: no `_internal\`
+folder, nothing to zip. This is what `release.yml` runs on tag and what end users
+download. Budget 30–90 minutes for the first build (it compiles paddle); the
+PyInstaller path above stays for fast local packaging and debugging.
+
+If a `.env` sits at the repo root, `build_nuitka.bat` **stops by default**. For a
+controlled internal-only build, `set VITALLENS_EMBED_ENV=1` opts in to embedding
+and prints a `[WARN]` block. Anyone holding that EXE can extract the token; never
+use the opt-in artifact as a release.
+
 ### Manual Build
 
 ```powershell
@@ -406,7 +486,7 @@ copy .env.example dist\VitalLens\.env.example
 A manual build skips the automatic secret scan — run the verification checklist
 in the release runbook before shipping.
 
-### Output Layout
+### PyInstaller debug output layout
 
 ```text
 dist\VitalLens\
@@ -427,10 +507,17 @@ shippable — see the runbook.
 
 ### Ship to End Users
 
-1. Run `build.bat` and confirm it ends with `[OK] No secret files found`.
-2. Zip `dist\VitalLens\` to a path **outside** `dist\`, then hand the ZIP over.
-3. Send the user's token through a separate channel (password manager or encrypted message), never in the same email as the ZIP.
-4. The user copies `.env.example` to `.env` and fills in their own values — no rebuild required for later changes.
+Releases come from CI: push a tag `vX.Y.Z` and `release.yml` publishes
+`VitalLens_v<version>.exe` + `latest.json` to GitHub Releases. Hand over the
+link, not a file.
+
+For a hand-built copy:
+
+1. Make sure the repo root has no `.env`, run `build_nuitka.bat`, and confirm the
+   log contains `[INFO] Khong co .env` **and** ends with `Build complete`.
+2. Send `dist_nuitka\VitalLens.exe` — one file, no ZIP, no folder.
+3. Send the user's token through a separate channel (password manager or encrypted message), never alongside the EXE.
+4. The user fills in URL + token via **⚙ Cấu hình kết nối** on the home page; it writes `%APPDATA%\VitalLens\.env`, so later changes need no rebuild.
 
 Step-by-step build, verification, packaging, and rollback procedures are in
 **[docs/RUNBOOK-build-release.md](docs/RUNBOOK-build-release.md)**.
@@ -449,7 +536,7 @@ These constants are defined at the top of `apps/processing/xray.py`. Increase th
 
 ## Notes
 
-- `build_exe.spec` collects Paddle/OCR dependencies and bundles pre-downloaded PaddleX models from `%USERPROFILE%\.paddlex\official_models`.
+- Both build paths bundle the pre-downloaded PaddleX models from `%USERPROFILE%\.paddlex\official_models`. They also include the `pylibjpeg-libjpeg` entry-point metadata and native `_libjpeg` module; without both, compressed DICOM can work from source but silently become unavailable in the packaged app.
 - The upload flow falls back to a demo confirmation when `API_UPLOAD_URL` is empty.
 - PDF redaction renders pages as rasterized images, so output files may be larger than the originals.
 - The `.env` fallback parser handles both `KEY=VALUE` and `KEY="VALUE"` formats with proper quote stripping.

@@ -12,6 +12,7 @@ Or use the wrapper script:
 from PyInstaller.utils.hooks import (
     collect_all,
     collect_dynamic_libs,
+    copy_metadata,
 )
 
 block_cipher = None
@@ -32,7 +33,7 @@ _PACKAGES_TO_COLLECT = [
     # --- PaddlePaddle / OCR ---
     'paddle', 'paddleocr', 'paddlex',
     # --- Image / Medical ---
-    'pydicom', 'pypdfium2', 'pylibjpeg',
+    'pydicom', 'pypdfium2', 'pylibjpeg', 'libjpeg',
     'cv2', 'numpy', 'PIL',
     # --- OCR dependencies ---
     'shapely', 'pyclipper', 'yaml',
@@ -50,6 +51,11 @@ for _pkg in _PACKAGES_TO_COLLECT:
         _all_hiddenimports += _h
     except Exception:
         pass
+
+# pylibjpeg tìm codec bằng `importlib.metadata.entry_points()`. Module `libjpeg`
+# có mặt thôi chưa đủ: thiếu dist-info này thì plugin vẫn báo unavailable trong
+# bundle dù chạy từ source hoàn toàn bình thường.
+_all_datas += copy_metadata('pylibjpeg-libjpeg')
 
 # Ensure critical native libraries are included
 for _lib_pkg in ('paddle', 'pypdfium2'):
@@ -135,14 +141,16 @@ _all_datas.append((str(_catalog_file), 'database'))
 # Hidden imports (lazy / dynamic imports not auto-detected)
 # =====================================================================
 _all_hiddenimports += [
-    # pydicom nạp plugin giải nén pixel bằng importlib theo tên → không công cụ
-    # đóng gói nào tự thấy. Chỉ liệt kê plugin THỰC SỰ dùng được với bộ deps hiện
-    # tại: pillow (JPEG baseline/extended) và rle (RLE, thuần Python trong
-    # pydicom). gdcm và pylibjpeg-libjpeg chưa cài (xem requirements.txt) nên
-    # không liệt kê — tên module không tồn tại làm Nuitka fail cả build.
+    # pydicom nạp plugin giải nén pixel động. Bộ deps hiện tại dùng Pillow cho
+    # JPEG baseline/extended + JPEG2000, pylibjpeg-libjpeg cho JPEG lossless /
+    # JPEG-LS, và decoder RLE thuần Python có sẵn trong pydicom.
     # Không cần encoder: xray.py luôn ghi ra Explicit VR Little Endian.
     'pydicom.pixels.decoders.pillow',
+    'pydicom.pixels.decoders.pylibjpeg',
     'pydicom.pixels.decoders.rle',
+    # Extension native của distribution pylibjpeg-libjpeg nằm ở top-level,
+    # ngoài package `libjpeg`, nên collect_all('libjpeg') không tự liệt kê nó.
+    '_libjpeg',
     # Tkinter image support
     'PIL.ImageTk',
     # Standard library modules used dynamically

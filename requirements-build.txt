@@ -2,7 +2,8 @@
 # VitalLens - build toolchain
 #
 # Chỉ cần trên máy build EXE. Tách khỏi requirements.txt để môi trường
-# chạy app không kéo theo PyInstaller.
+# chạy app không kéo theo PyInstaller/Nuitka.
+# Rà phiên bản lần cuối: 2026-08-18, Python 3.12.13 / Windows.
 #
 #   pip install -r requirements-build.txt
 # (dòng dưới tự kéo luôn toàn bộ runtime deps)

@@ -4,7 +4,9 @@
 # Pin cứng (==) để hai máy build ở hai thời điểm ra cùng một bundle.
 # Chỉ pin package DÙNG TRỰC TIẾP; pip tự giải phần phụ thuộc gián tiếp.
 #
-# Đã kiểm chứng trên Python 3.12.13 / Windows.
+# Rà phiên bản lần cuối: 2026-08-18, Python 3.12.13 / Windows.
+# "Mới nhất" ở đây là bản stable mới nhất TƯƠNG THÍCH với cả stack PaddleX,
+# không phải cứ lấy version lớn nhất trên PyPI (xem hai ngoại lệ bên dưới).
 # Công cụ build (PyInstaller) nằm riêng: requirements-build.txt
 # =====================================================================
 
@@ -13,27 +15,30 @@ paddlepaddle==3.3.1
 paddleocr==3.7.0
 paddlex==3.7.2
 
-# OpenCV: KHÔNG package nào khai báo nó là dependency, nhưng paddlex
-# `import cv2` ở 47 file → bắt buộc phải có, và phải tự pin.
-# Dùng bản `headless`: app Tkinter không dùng cửa sổ GUI của OpenCV, còn
-# bản `contrib` chứa các module nghiên cứu mà pipeline OCR không đụng tới.
-# (thay cho opencv-contrib-python 4.10.0.84 ~121 MB)
-opencv-python-headless==4.10.0.84
+# PaddleOCR kéo `paddlex[ocr-core]`, mà extra này khóa CHÍNH XÁC wheel contrib
+# 4.10.0.84. Không thay bằng `opencv-python-headless`: pip vẫn phải cài contrib
+# theo dependency và hai wheel cùng cung cấp namespace `cv2`, dễ ghi đè file của
+# nhau. OpenCV 5.x đã có trên PyPI nhưng chưa tương thích với stack PaddleX 3.7.x.
+opencv-contrib-python==4.10.0.84
 
 # --- Image / DICOM ---
 pydicom==3.0.2
+# PaddleX 3.7.2 khai báo numpy>=1.24,<2.4. Bản 2.3.5 là stable mới nhất còn
+# nằm trong khoảng tương thích; numpy 2.4/2.5 sẽ làm resolver lệch constraint.
 numpy==2.3.5
 Pillow==12.3.0
 
-# Giải nén DICOM: pydicom không tự giải ảnh nén, phải có plugin.
-#   pylibjpeg-libjpeg -> JPEG baseline / lossless
-# LƯU Ý: chưa có plugin cho JPEG2000 và RLE. Nếu ảnh X-quang của bạn dùng
-# hai định dạng đó thì `ds.pixel_array` (xray.py:214) sẽ ném lỗi — bỏ
-# comment dòng tương ứng bên dưới.
+# Giải nén DICOM với bộ pin hiện tại:
+#   Pillow               -> JPEG baseline/extended + JPEG2000
+#   pylibjpeg-libjpeg     -> JPEG baseline/lossless + JPEG-LS
+#   pydicom decoder       -> RLE Lossless (thuần Python, có sẵn)
+# Hai plugin dưới đây chỉ là backend thay thế/tăng tốc, không bắt buộc để có
+# JPEG2000/RLE. Nếu bật, phải thêm package + metadata tương ứng vào cả hai cấu
+# hình đóng gói (`build_exe.spec` và `build_nuitka.bat`).
 pylibjpeg==2.1.0
 pylibjpeg-libjpeg==2.4.0
-# pylibjpeg-openjpeg==2.5.0    # JPEG2000 — hay gặp ở ảnh CR/DX
-# pylibjpeg-rle==2.2.0         # RLE Lossless
+# pylibjpeg-openjpeg==2.5.0    # backend JPEG2000 thay thế
+# pylibjpeg-rle==2.2.0         # backend RLE native thay thế
 
 # ĐÃ GỠ: `gdcm==1.1`
 #   Đó KHÔNG phải thư viện GDCM chính thức (Summary/Home-page = UNKNOWN,
@@ -44,7 +49,7 @@ pylibjpeg-libjpeg==2.4.0
 #   Nếu muốn đủ codec trong MỘT package, dùng bản chính thức: python-gdcm
 
 # --- PDF ---
-pypdfium2==5.11.0
+pypdfium2==5.12.1
 
 # --- Excel ---
 openpyxl==3.1.5

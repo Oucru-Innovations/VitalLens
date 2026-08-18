@@ -3,9 +3,9 @@ name: Release
 # Đẩy tag `vX.Y.Z` → build MỘT file `VitalLens.exe` (Nuitka onefile) trên
 # Windows sạch, quét secret, tạo GitHub Release.
 #
-# Vì sao build trên máy CI chứ không phải máy dev: máy dev có `.env` thật nằm
-# cạnh repo, và `build_nuitka.bat` NHÚNG file đó vào binary nếu thấy. Runner
-# khởi tạo trắng nên bản phát hành luôn là bản SẠCH — người dùng tự nhập
+# Vì sao build trên máy CI chứ không phải máy dev: máy dev có thể có `.env` thật
+# cạnh repo. `build_nuitka.bat` mặc định từ chối trường hợp đó; runner còn kiểm
+# tra lại ngay trước build nên bản phát hành luôn SẠCH — người dùng tự nhập
 # API_UPLOAD_URL / API_BEARER_TOKEN qua dialog Cài đặt (ghi ra
 # %APPDATA%\VitalLens\.env). Đây là khác biệt CỐ Ý so với build tay.
 #
@@ -97,6 +97,10 @@ jobs:
         # %CONDA_PREFIX%\python.exe (priority 1) — để nguyên là nó bắt python
         # của conda base, nơi không có Nuitka, rồi chết ở bước kiểm tra.
         run: |
+          if (Test-Path -LiteralPath ".env") {
+            throw "Repo root có .env ngay trước build; dừng để không nhúng secret"
+          }
+          $env:VITALLENS_EMBED_ENV = "0"
           Remove-Item Env:CONDA_PREFIX -ErrorAction SilentlyContinue
           .\build_nuitka.bat
 

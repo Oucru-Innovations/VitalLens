@@ -3,23 +3,29 @@
 Vì sao không để `.env` cạnh `VitalLens.exe` (cách cũ, vẫn đọc được để tương
 thích ngược):
 
-- Bản phát hành là ZIP giải nén đè. Config nằm trong thư mục app nghĩa là mỗi
-  lần cập nhật người dùng phải chép tay `.env` sang — bước thủ công, dễ quên,
-  và là lý do runbook phải dặn "giữ nguyên .env" ở mục rollback.
+- Bản phát hành hiện là một EXE onefile thay theo version. Config nằm cạnh EXE
+  nghĩa là mỗi lần đổi file/đổi thư mục người dùng phải chép tay `.env` sang —
+  bước thủ công và dễ quên.
 - Người dùng hay copy nguyên thư mục app cho đồng nghiệp. Token đi theo.
 - Windows Explorer từ chối tạo file bắt đầu bằng dấu chấm, nên "đổi tên
   `.env.example` thành `.env`" là bước hỏng nhiều nhất trong hướng dẫn cài đặt
   (cũng chính là lý do `config.py` phải chấp nhận cả tên `env` không dấu chấm).
 
-Nhờ vậy bản phát hành **không chứa file config nào** — cổng quét secret trong
-`build.bat` giữ nguyên mức tuyệt đối, không phải nới ra để ship `.env`.
+Nhờ vậy bản phát hành chính thức **không chứa file config nào**. Runner CI sạch
+không có `.env` để Nuitka nhúng; `build.bat` vẫn giữ cổng quét tuyệt đối cho
+bundle PyInstaller dùng debug.
 
-ponytail: token nằm dạng plaintext trong profile người dùng. ACL của Windows
-đã giới hạn `%APPDATA%\\Roaming` cho chính user đó, và kẻ tấn công đã chạy được
-code dưới quyền user thì mã hoá DPAPI cũng giải ra được — nên chưa mã hoá.
-Nếu sau này cần chống được cả việc đọc trộm file khi máy bị mount ngoài, bọc
-giá trị `API_BEARER_TOKEN` bằng `CryptProtectData` (ctypes, không cần thêm
-dependency) và giải mã trong `config.py`.
+Giới hạn bảo mật: token hiện nằm dạng plaintext trong profile người dùng. Không
+thể vừa cho app chạy dưới chính tài khoản đó đọc token, vừa bảo đảm chủ tài
+khoản không đọc/sửa/xoá được nó; cờ read-only hay ACL chỉ ngăn nhầm tay hoặc
+tài khoản khác và chủ sở hữu/admin có thể đổi lại quyền.
+
+DPAPI (`CryptProtectData`) hoặc Windows Credential Manager sẽ tốt hơn cho dữ
+liệu lưu trên đĩa: file không còn lộ plaintext và bản sao đem sang máy/tài khoản
+khác thường không giải được. Chúng vẫn không phải ranh giới bảo mật với tiến
+trình chạy dưới cùng tài khoản, và user vẫn có thể xoá/ghi đè credential. Vì
+thế hiện chưa mã hoá giả tạo; nếu threat model đổi, xem RUNBOOK-secrets.md rồi
+đổi cả chỗ ghi lẫn chỗ nạp trong `config.py` theo một migration có version.
 """
 
 from __future__ import annotations

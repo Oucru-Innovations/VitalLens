@@ -9,7 +9,7 @@ trì (Esky 2016/Python 2, PyUpdater 2021), thêm vào là nhận nợ ngay ngày
 
 Manifest là một file JSON nhỏ, PUBLIC, KHÔNG chứa token:
 
-    {"version": "0.3.0", "url": "https://.../releases/latest"}
+    {"version": "0.4.0", "url": "https://.../releases/latest"}
 
 ``.github/workflows/release.yml`` sinh file này mỗi lần tag. Nơi host là lựa
 chọn của người vận hành (server API sẵn có, GitHub Pages, ...) vì repo đang

@@ -1353,9 +1353,9 @@ class UploadPDFPage(tk.Frame):
     ) -> tuple[str, str, str]:
         """Sinh (pdf_name, csv_name, display_name) không trùng trong kho.
 
-        Xét CẢ pending lẫn uploaded: `pdf_name` được ghi vào CSV làm khoá phân
-        biệt nội dung (xem `export_store.write_csv`), nên nó phải duy nhất
-        trong toàn bộ kho chứ không chỉ trong thư mục đang ghi.
+        Xét CẢ pending lẫn uploaded để không ghi đè file trên ổ đĩa. Tính duy
+        nhất toàn cục của nội dung CSV do UUID ``export_id`` đảm nhiệm; tên này
+        chỉ cần duy nhất bên trong workspace hiện tại.
         """
 
         folders = (
@@ -1438,7 +1438,7 @@ class UploadPDFPage(tk.Frame):
             old_pdf = exp.get("pdf_path")
             old_csv = exp.get("csv_path")
             old_meta = exp.get("meta_path")
-            export_id = exp.get("id", export_id)
+            export_id = exp.get("id") or export_id
 
         snapshot_form = copy.deepcopy(form)
         snapshot_redacts = copy.deepcopy(self.redactions.get(self.current_file, {}))
@@ -1453,7 +1453,7 @@ class UploadPDFPage(tk.Frame):
             save_redacted_pdf(
                 src_file, snapshot_redacts, pdf_tmp, scale=SAVE_RENDER_SCALE
             )
-            export_store.write_csv(csv_tmp, form, pdf_name)
+            export_store.write_csv(csv_tmp, form, pdf_name, export_id)
             os.replace(pdf_tmp, pdf_path)
             os.replace(csv_tmp, csv_path)
             return None
@@ -1516,6 +1516,7 @@ class UploadPDFPage(tk.Frame):
             exp = self.saved_exports[self.current_export_idx]
             exp.update(
                 {
+                    "id": export_id,
                     "pdf_path": pdf_path,
                     "csv_path": csv_path,
                     "display_name": display_name,
@@ -1844,10 +1845,20 @@ class UploadPDFPage(tk.Frame):
         khi lô bị dừng ngay sau đó.
         """
 
-        # Cặp lưu bằng bản cũ chưa có cột `file_name` → vẫn dính lỗi trùng
-        # hash ở backend. Vá tại chỗ ngay trước khi gửi.
+        # Cặp lưu bằng bản cũ có thể thiếu `file_name`/`export_id` → vẫn dính
+        # lỗi trùng hash ở backend. Chỉ gửi sau khi vá tại chỗ thành công.
         if not exp.get("csv_sent"):
-            export_store.ensure_csv_file_name(exp)
+            try:
+                export_store.ensure_csv_identity(exp)
+            except export_store.CsvMigrationError as e:
+                exp["attempts"] = int(exp.get("attempts", 0) or 0) + 1
+                exp["last_attempt_at"] = _now_stamp()
+                exp["last_error"] = (
+                    "Không thể chuẩn hoá CSV cũ trước khi upload: "
+                    f"{e}. Kiểm tra file còn tồn tại và có quyền ghi, rồi thử lại."
+                )
+                self._write_meta_quiet(pending_folder, exp)
+                return _upload_record(exp, False, exp["last_error"])
 
         res = upload_pair(
             API_UPLOAD_URL,

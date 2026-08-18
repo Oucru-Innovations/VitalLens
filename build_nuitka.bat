@@ -8,8 +8,9 @@ cd /d "%~dp0"
 ::
 :: Khac biet so voi build.bat (PyInstaller):
 ::   - Ket qua la 1 file .exe, khong co thu muc _internal\ di kem.
-::   - Neu ton tai .env o repo root, file do duoc NHUNG vao binary.
-::     => Token nam trong file phat hanh. Doc muc [WARN] ben duoi.
+::   - Mac dinh TU CHOI build neu repo root co .env de tranh nhung token that.
+::   - Chi build noi bo: set VITALLENS_EMBED_ENV=1 de chap nhan nhung .env.
+::     Secret trong EXE van trich xuat duoc; tuyet doi khong dung file do release.
 :: ====================================================================
 
 set "PYTHON_EXE="
@@ -63,16 +64,32 @@ if not exist "%MODELS%\en_PP-OCRv5_mobile_rec" (
 )
 echo [OK] Models found.
 
-:: --- .env: nhung vao binary neu co (KHONG dat trong () de %VAR% no ra ngay) ---
+:: --- .env: fail-safe; chi nhung khi nguoi build opt-in ro rang ---
 set "ENV_OPT="
-if exist ".env" set "ENV_OPT=--include-data-files=.env=.env"
-if exist ".env" echo.
-if exist ".env" echo [WARN] NHUNG file: %~dp0.env
-if exist ".env" echo [WARN] .env se duoc NHUNG vao VitalLens.exe.
-if exist ".env" echo [WARN] Bearer token nam trong binary phat hanh: ai co file exe
-if exist ".env" echo [WARN] deu rut duoc token ra. Chi lam vay khi token dung chung
-if exist ".env" echo [WARN] cho ca nhom va ban chap nhan phai build lai khi doi token.
-if exist ".env" echo [WARN] Khong muon nhung: doi ten .env roi build lai.
+set "EMBED_ENV_ALLOWED="
+:: Delayed expansion o block nho nay de gia tri env co quote/metachar khong lam
+:: hong cu phap batch. Chi chuoi dung chinh xac `1` moi duoc chap nhan.
+setlocal EnableDelayedExpansion
+if /I "!VITALLENS_EMBED_ENV!"=="1" (
+    endlocal
+    set "EMBED_ENV_ALLOWED=1"
+) else (
+    endlocal
+)
+if exist ".env" if not defined EMBED_ENV_ALLOWED (
+    echo.
+    echo [ERROR] Repo root dang co %~dp0.env
+    echo [ERROR] Build mac dinh dung lai de khong vo tinh nhung token vao EXE.
+    echo [ERROR] Ban release: doi ten/xoa .env, roi chay lai va phai thay dong:
+    echo [ERROR] [INFO] Khong co .env - build sach.
+    echo [ERROR] Chi build NOI BO co chu dich: set VITALLENS_EMBED_ENV=1
+    exit /b 1
+)
+if exist ".env" if defined EMBED_ENV_ALLOWED set "ENV_OPT=--include-data-files=.env=.env"
+if defined ENV_OPT echo.
+if defined ENV_OPT echo [WARN] BUILD NOI BO: dang NHUNG %~dp0.env vao VitalLens.exe.
+if defined ENV_OPT echo [WARN] Secret trong EXE co the bi trich xuat, sua va override.
+if defined ENV_OPT echo [WARN] KHONG phat hanh artifact nay. Xoay token can build lai.
 if not exist ".env" echo [INFO] Khong co .env - build sach, nguoi dung tu nhap qua dialog Cai dat.
 
 :: --- Step 3: Nuitka ---
@@ -88,10 +105,10 @@ if not exist ".env" echo [INFO] Khong co .env - build sach, nguoi dung tu nhap q
 ::   KHONG dung --python-flag=no_asserts: paddle dung assert de kiem tra tham so,
 ::       app xu ly du lieu y te thi khong bo kiem tra de doi vai MB.
 ::   --include-module=pydicom.pixels.decoders.* : pydicom nap plugin giai nen
-::       pixel bang importlib theo ten -> Nuitka khong tu lan toi. Chi liet ke
-::       plugin THUC SU dung duoc: pillow (JPEG baseline/extended) va rle. Ten
-::       module khong ton tai lam Nuitka FAIL ca build (khac PyInstaller chi
-::       canh bao) - pydicom 3.x da doi pydicom.encoders.* thanh pydicom.pixels.*
+::       pixel bang importlib theo ten -> Nuitka khong tu lan toi. Bo hien tai:
+::       pillow (JPEG/JPEG2000), pylibjpeg-libjpeg (JPEG lossless/JPEG-LS),
+::       va rle thuan Python. pylibjpeg-libjpeg con tim codec qua entry point,
+::       nen phai kem ca module `_libjpeg` + distribution metadata ben duoi.
 echo.
 echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
 "%PYTHON_EXE%" -m nuitka main.py ^
@@ -122,15 +139,21 @@ echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
   --include-package=paddleocr ^
   --include-package=paddlex ^
   --include-package=google.protobuf ^
+  --include-package=pylibjpeg ^
+  --include-package=libjpeg ^
   --include-package-data=paddle ^
   --include-package-data=paddleocr ^
   --include-package-data=paddlex ^
   --include-package-data=pypdfium2 ^
   --include-package-data=pypdfium2_raw ^
   --include-package-data=pydicom ^
+  --include-package-data=pylibjpeg ^
   --include-package-data=certifi ^
   --include-module=pydicom.pixels.decoders.pillow ^
+  --include-module=pydicom.pixels.decoders.pylibjpeg ^
   --include-module=pydicom.pixels.decoders.rle ^
+  --include-module=_libjpeg ^
+  --include-distribution-metadata=pylibjpeg-libjpeg ^
   --nofollow-import-to=matplotlib ^
   --nofollow-import-to=scipy ^
   --nofollow-import-to=IPython ^
@@ -147,7 +170,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: --- Step 4: Quet secret (chi con dung cho file ROI canh exe) ---
+:: --- Step 4: Quet file secret roi canh exe; nhung co chu dich da canh bao o tren ---
 echo.
 echo [4/4] Scanning output...
 set "OUT=dist_nuitka\VitalLens.exe"
@@ -171,6 +194,7 @@ echo ============================================================
 echo  Gui thang file .exe nay cho nguoi dung, khong can zip gi them.
 if defined ENV_OPT echo  Cau hinh mac dinh da nhung san; nguoi dung van ghi de duoc
 if defined ENV_OPT echo  qua dialog Cai dat (%%APPDATA%%\VitalLens\.env thang do uu tien).
+if defined ENV_OPT echo  [INTERNAL ONLY] KHONG dung EXE nay lam release.
 if not defined ENV_OPT echo  Nguoi dung nhap API_UPLOAD_URL / API_BEARER_TOKEN qua dialog Cai dat.
 echo.
 exit /b 0
