@@ -28,6 +28,7 @@ jobs:
           python -m apps.config
           python -m apps.services.update_check
           python -m apps.services.user_config
+          python -m apps.services.export_store
 
       - name: Không file secret nào được commit
         run: |

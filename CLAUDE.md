@@ -57,6 +57,8 @@ The `%APPDATA%` location is the one users get: `widgets/settings_dialog.py` writ
 
 `pdf_sent` / `csv_sent` are per-file delivery flags: the backend uses `upload.single("file")`, so a pair is two separate POSTs, and a retry must skip whichever already landed.
 
+The backend deduplicates by **content hash, ignoring filename**, and cannot be changed. Two saves for the same patient/type/dates produce a byte-identical CSV, so the server silently drops the second one — the PDF lands, its metadata does not. `export_store.write_csv` therefore appends a `file_name` column holding the pair's PDF name, and `UploadPDFPage._unique_export_names` checks `pending/` **and** `uploaded/` so that name is unique across the whole store. Removing either half brings the silent metadata loss back. Pairs saved before that column existed are patched in place by `ensure_csv_file_name` right before they are sent. `python -m apps.services.export_store` asserts all of it (self-check at the bottom of the module, wired into `ci.yml` alongside the other tkinter-free ones).
+
 ### Retry policy (`services/upload_api.py`)
 
 The endpoint has **no idempotency key**, so an auto-retry of a request the server already processed creates a duplicate record. Auto-retry is therefore limited to cases where nothing could have reached the app: connection-phase exceptions (`ConnectTimeout`, `ConnectionError`, `ProxyError`, `SSLError`) and statuses 408/425/429/502/503/504. `ReadTimeout`, `ChunkedEncodingError`, and 500 are **never** auto-retried — they return `retryable=True` so the user decides. Preserve this distinction when touching error handling.
@@ -108,7 +110,7 @@ Long work runs on daemon threads; Tk is touched only from the main thread. Two p
 | Lab PDF | Pages rasterized via pypdfium2, regions painted black — underlying text is gone, not covered | `services/pdf_redact.py` |
 | X-Ray | PaddleOCR detects burned-in text and paints it out; DICOM tags in `DICOM_PATIENT_TAGS` anonymized | `processing/xray.py` |
 | XML → Excel | Only XML4 is decoded; `XML4_EXCLUDED_COLUMNS` omitted **at column-selection time only**, and only catalogue-`Include` services reach the main sheet. With a study list, `ID`/`MA_LK` are replaced by `USUBJID` on the matched sheets (but not on `XML4_KhongKhopHRN`) | `processing/xml_to_excel.py` |
-| CSV export | Cells starting with `= + - @` get a `'` prefix (formula injection) | `pages/upload/page.py` |
+| CSV export | Cells starting with `= + - @` get a `'` prefix (formula injection) | `services/export_store.py` |
 
 OCR false-positive thresholds (`OCR_DET_SCORE_THRESHOLD`, `OCR_REC_SCORE_THRESHOLD`, `OCR_MIN_TEXT_LENGTH`, `OCR_MIN_BBOX_AREA`) are constants at the top of `processing/xray.py`. Detection proposes regions, recognition validates them — only confirmed text is erased.
 

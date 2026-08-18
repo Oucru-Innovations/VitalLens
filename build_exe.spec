@@ -135,10 +135,14 @@ _all_datas.append((str(_catalog_file), 'database'))
 # Hidden imports (lazy / dynamic imports not auto-detected)
 # =====================================================================
 _all_hiddenimports += [
-    # pydicom decoders
-    'pydicom.encoders.gdcm',
-    'pydicom.encoders.pylibjpeg',
-    'pylibjpeg.libjpeg',
+    # pydicom nạp plugin giải nén pixel bằng importlib theo tên → không công cụ
+    # đóng gói nào tự thấy. Chỉ liệt kê plugin THỰC SỰ dùng được với bộ deps hiện
+    # tại: pillow (JPEG baseline/extended) và rle (RLE, thuần Python trong
+    # pydicom). gdcm và pylibjpeg-libjpeg chưa cài (xem requirements.txt) nên
+    # không liệt kê — tên module không tồn tại làm Nuitka fail cả build.
+    # Không cần encoder: xray.py luôn ghi ra Explicit VR Little Endian.
+    'pydicom.pixels.decoders.pillow',
+    'pydicom.pixels.decoders.rle',
     # Tkinter image support
     'PIL.ImageTk',
     # Standard library modules used dynamically

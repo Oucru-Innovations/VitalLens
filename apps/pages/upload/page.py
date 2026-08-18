@@ -22,7 +22,6 @@ hiện báo cáo "cặp nào đã lên / cặp nào chưa và vì sao".
 from __future__ import annotations
 
 import copy
-import csv
 import logging
 import os
 import queue
@@ -78,17 +77,6 @@ TYPE_OPTIONS = ("Hematology", "Biochemistry", "Microbiology", "Other")
 SHUTDOWN_JOIN_TIMEOUT = 10.0
 
 # Naming rule: [DropdownType][Image/Metadata]_[PatientCode]_[dd.MM.yyyy.HH.mm.ss].<ext>
-
-# Ký tự đầu ô mà Excel/Sheets hiểu là công thức → phải "thoát" khi ghi CSV.
-_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
-
-
-def _csv_safe(value: str) -> str:
-    """Chống CSV formula injection: prefix ' cho ô bắt đầu bằng ký tự công thức."""
-
-    if value and value[0] in _CSV_FORMULA_PREFIXES:
-        return "'" + value
-    return value
 
 
 def _now_stamp() -> str:
@@ -698,6 +686,7 @@ class UploadPDFPage(tk.Frame):
             anchor="w",
         ).pack(fill="x", padx=8, pady=5)
 
+        _entry_row("sid", "SID:")
         _entry_row("patient_code", "Patient Code:")
 
         # Type
@@ -726,33 +715,9 @@ class UploadPDFPage(tk.Frame):
         type_box["values"] = TYPE_OPTIONS
         type_box.pack(fill="x", ipady=4, padx=2, pady=1)
 
-        # Other Type
-        self.row_other = tk.Frame(form, bg=BG_CARD)
-        tk.Label(
-            self.row_other,
-            text="Specify Other:",
-            font=("Helvetica", 11, "bold"),
-            bg=BG_CARD,
-            fg=FG_TEXT,
-            width=20,
-            anchor="e",
-        ).pack(side="left", padx=(0, 6))
-        self.form_vars["other_type"] = tk.StringVar(value="")
-        other_wrapper = _input_border(self.row_other)
-        other_wrapper.pack(side="left", fill="x", expand=True)
-        other_entry = tk.Entry(
-            other_wrapper,
-            textvariable=self.form_vars["other_type"],
-            font=("Helvetica", 11),
-            bg=BG_INPUT,
-            fg=FG_TEXT,
-            insertbackground=FG_TEXT,
-            borderwidth=0,
-            highlightthickness=0,
-            relief="flat",
-        )
-        self.input_widgets.append(other_entry)
-        other_entry.pack(fill="x", ipady=5, padx=4, pady=2)
+        # Other Type - chỉ hiện khi Type = "Other" (xem on_type_selected).
+        self.row_other = _entry_row("other_type", "Specify Other:")
+        self.row_other.pack_forget()
 
         def on_type_selected(event=None):
             if self.form_vars["type"].get() == "Other":
@@ -1384,10 +1349,19 @@ class UploadPDFPage(tk.Frame):
                 continue
 
     def _unique_export_names(
-        self, folder: str, safe_type: str, safe_patient: str, current_time: str
+        self, base_dir: str, safe_type: str, safe_patient: str, current_time: str
     ) -> tuple[str, str, str]:
-        """Sinh (pdf_name, csv_name, display_name) không trùng file trong `folder`."""
+        """Sinh (pdf_name, csv_name, display_name) không trùng trong kho.
 
+        Xét CẢ pending lẫn uploaded: `pdf_name` được ghi vào CSV làm khoá phân
+        biệt nội dung (xem `export_store.write_csv`), nên nó phải duy nhất
+        trong toàn bộ kho chứ không chỉ trong thư mục đang ghi.
+        """
+
+        folders = (
+            export_store.pending_dir(base_dir),
+            export_store.uploaded_dir(base_dir),
+        )
         n = 1
         suffix = ""
         while True:
@@ -1397,6 +1371,7 @@ class UploadPDFPage(tk.Frame):
             meta_name = f"{display_name}.meta.json"
             if not any(
                 os.path.exists(os.path.join(folder, x))
+                for folder in folders
                 for x in (pdf_name, csv_name, meta_name)
             ):
                 return pdf_name, csv_name, display_name
@@ -1408,6 +1383,11 @@ class UploadPDFPage(tk.Frame):
             return
         if not self.current_file:
             show_warning(self, "Chưa chọn file", "Vui lòng chọn file PDF trước.")
+            return
+
+        sid = self.form_vars["sid"].get().strip()
+        if not sid:
+            show_warning(self, "Thiếu thông tin", "Vui lòng nhập SID.")
             return
 
         patient_code = self.form_vars["patient_code"].get().strip()
@@ -1446,7 +1426,7 @@ class UploadPDFPage(tk.Frame):
 
         is_edit = self.current_export_idx is not None
         pdf_name, csv_name, display_name = self._unique_export_names(
-            pending, safe_type, safe_patient, current_time
+            output_dir, safe_type, safe_patient, current_time
         )
         pdf_path = os.path.join(pending, pdf_name)
         csv_path = os.path.join(pending, csv_name)
@@ -1473,7 +1453,7 @@ class UploadPDFPage(tk.Frame):
             save_redacted_pdf(
                 src_file, snapshot_redacts, pdf_tmp, scale=SAVE_RENDER_SCALE
             )
-            self._write_csv(csv_tmp, form)
+            export_store.write_csv(csv_tmp, form, pdf_name)
             os.replace(pdf_tmp, pdf_path)
             os.replace(csv_tmp, csv_path)
             return None
@@ -1611,15 +1591,6 @@ class UploadPDFPage(tk.Frame):
             pass
 
         self.status.set(f"Đã lưu: {pdf_name} và {csv_name}", "success")
-
-    def _write_csv(self, output_path: str, form: dict) -> None:
-        fieldnames = list(form.keys())
-        # Sanitize chống CSV formula injection khi mở bằng Excel/Sheets.
-        safe_row = {k: _csv_safe(str(v)) for k, v in form.items()}
-        with open(output_path, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerow(safe_row)
 
     # ================================================================
     # UPLOAD
@@ -1872,6 +1843,11 @@ class UploadPDFPage(tk.Frame):
         xuống meta trước khi trả về, nên trạng thái trên đĩa luôn đúng kể cả
         khi lô bị dừng ngay sau đó.
         """
+
+        # Cặp lưu bằng bản cũ chưa có cột `file_name` → vẫn dính lỗi trùng
+        # hash ở backend. Vá tại chỗ ngay trước khi gửi.
+        if not exp.get("csv_sent"):
+            export_store.ensure_csv_file_name(exp)
 
         res = upload_pair(
             API_UPLOAD_URL,

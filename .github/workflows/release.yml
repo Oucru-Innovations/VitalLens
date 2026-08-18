@@ -1,13 +1,18 @@
 name: Release
 
-# Đẩy tag `vX.Y.Z` → build EXE trên Windows sạch, quét secret, tạo GitHub Release.
+# Đẩy tag `vX.Y.Z` → build MỘT file `VitalLens.exe` (Nuitka onefile) trên
+# Windows sạch, quét secret, tạo GitHub Release.
 #
 # Vì sao build trên máy CI chứ không phải máy dev: máy dev có `.env` thật nằm
-# cạnh repo, và mọi lần đóng gói thủ công đều là một cơ hội để nó lọt vào ZIP.
-# Runner khởi tạo trắng, không có credential nào để lọt.
+# cạnh repo, và `build_nuitka.bat` NHÚNG file đó vào binary nếu thấy. Runner
+# khởi tạo trắng nên bản phát hành luôn là bản SẠCH — người dùng tự nhập
+# API_UPLOAD_URL / API_BEARER_TOKEN qua dialog Cài đặt (ghi ra
+# %APPDATA%\VitalLens\.env). Đây là khác biệt CỐ Ý so với build tay.
 #
-# LƯU Ý CHI PHÍ: repo private + runner Windows = hệ số 2x phút Actions. Job này
-# ~20-40 phút/lần nên chỉ chạy khi tag, không chạy theo push.
+# LƯU Ý CHI PHÍ: repo private + runner Windows = hệ số 2x phút Actions. Nuitka
+# phải biên dịch cả paddle nên lần đầu ~60-90 phút (≈120-180 phút bị tính).
+# Cache Nuitka bên dưới kéo các lần sau xuống ~20-30 phút. Chỉ chạy khi tag,
+# không chạy theo push.
 on:
   push:
     tags: ["v*"]
@@ -19,7 +24,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
 
@@ -52,10 +57,10 @@ jobs:
           fi
 
       - name: Cài dependency vào .venv
-        # build.bat tự ưu tiên .venv\Scripts\python.exe (priority 2) nên không
-        # phải sửa gì trong script build. KHÔNG cài vào python hệ thống: nếu
-        # build.bat rơi xuống priority 3 (`py`) nó có thể bắt đúng interpreter
-        # khác và thiếu PyInstaller.
+        # build_nuitka.bat tự ưu tiên .venv\Scripts\python.exe (priority 2) nên
+        # không phải sửa gì trong script build. KHÔNG cài vào python hệ thống:
+        # rơi xuống priority 3 (`where python`) là bắt nhầm interpreter thiếu
+        # Nuitka.
         run: |
           python -m venv .venv
           .venv\Scripts\python -m pip install --upgrade pip
@@ -67,22 +72,38 @@ jobs:
           path: ~/.paddlex/official_models
           key: paddlex-PP-OCRv5_mobile_det-en_PP-OCRv5_mobile_rec
 
+      - name: Cache Nuitka (ccache + object đã biên dịch)
+        # Đây là thứ quyết định job chạy 90 phút hay 25 phút: gần hết thời gian
+        # là biên dịch C của paddle, mà paddle chỉ đổi khi requirements.txt đổi.
+        # Key theo requirements nên pin mới = dựng lại từ đầu, đúng như mong đợi.
+        uses: actions/cache@v6
+        with:
+          path: ~/AppData/Local/Nuitka/Nuitka/Cache
+          key: nuitka-${{ hashFiles('requirements*.txt') }}
+          restore-keys: nuitka-
+
       - name: Tải sẵn OCR models
-        # build_exe.spec đóng gói model từ %USERPROFILE%\.paddlex\official_models.
+        # build_nuitka.bat đóng gói model từ %USERPROFILE%\.paddlex\official_models.
         # Gọi thẳng _get_ocr() để khỏi chép lại tên/tham số model ở đây — sửa
         # model trong xray.py là bước này tự theo.
         run: .venv\Scripts\python -c "from apps.logging_setup import setup_logging; setup_logging(); from apps.processing.xray import _get_ocr; _get_ocr()"
 
-      - name: Build
-        # build.bat = PyInstaller + copy .env.example + xoá database\ thừa +
-        # quét secret trong dist\. Cổng chặn secret nằm sẵn trong đó, không
-        # dựng lại ở đây.
-        run: .\build.bat
+      - name: Build (Nuitka onefile)
+        # Gọi thẳng build_nuitka.bat để mọi cờ Nuitka chỉ khai ở MỘT chỗ — sửa
+        # cờ trong .bat là CI theo ngay. Cổng chặn secret trong dist_nuitka\
+        # cũng nằm sẵn trong đó, không dựng lại ở đây.
+        #
+        # Xoá CONDA_PREFIX: runner có sẵn Miniconda, mà .bat ưu tiên
+        # %CONDA_PREFIX%\python.exe (priority 1) — để nguyên là nó bắt python
+        # của conda base, nơi không có Nuitka, rồi chết ở bước kiểm tra.
+        run: |
+          Remove-Item Env:CONDA_PREFIX -ErrorAction SilentlyContinue
+          .\build_nuitka.bat
 
-      - name: Đóng gói ZIP
-        # 7z có sẵn trên runner và nhanh hơn Compress-Archive nhiều lần với
-        # thư mục ~700 MB (runbook vẫn dùng Compress-Archive cho build tay).
-        run: 7z a -bso0 "VitalLens_v$env:VERSION.zip" .\dist\VitalLens\*
+      - name: Đặt tên file theo version
+        # Onefile nên không có gì để zip. Đổi tên để nhìn file là biết bản nào
+        # (metadata version có sẵn trong exe nhưng phải mở Properties mới thấy).
+        run: Move-Item dist_nuitka\VitalLens.exe "VitalLens_v$env:VERSION.exe"
 
       - name: Sinh manifest cập nhật
         # File này chỉ có version + link, KHÔNG có token. Muốn app tự báo bản
@@ -99,4 +120,4 @@ jobs:
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$env:GITHUB_REF_NAME" --generate-notes "VitalLens_v$env:VERSION.zip" latest.json
+        run: gh release create "$env:GITHUB_REF_NAME" --generate-notes "VitalLens_v$env:VERSION.exe" latest.json

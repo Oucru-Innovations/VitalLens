@@ -87,6 +87,11 @@ if not exist ".env" echo [INFO] Khong co .env - build sach, nguoi dung tu nhap q
 ::       Nuitka khong tu lan het duoc. Tuong duong collect_all() trong spec.
 ::   KHONG dung --python-flag=no_asserts: paddle dung assert de kiem tra tham so,
 ::       app xu ly du lieu y te thi khong bo kiem tra de doi vai MB.
+::   --include-module=pydicom.pixels.decoders.* : pydicom nap plugin giai nen
+::       pixel bang importlib theo ten -> Nuitka khong tu lan toi. Chi liet ke
+::       plugin THUC SU dung duoc: pillow (JPEG baseline/extended) va rle. Ten
+::       module khong ton tai lam Nuitka FAIL ca build (khac PyInstaller chi
+::       canh bao) - pydicom 3.x da doi pydicom.encoders.* thanh pydicom.pixels.*
 echo.
 echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
 "%PYTHON_EXE%" -m nuitka main.py ^
@@ -124,9 +129,8 @@ echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
   --include-package-data=pypdfium2_raw ^
   --include-package-data=pydicom ^
   --include-package-data=certifi ^
-  --include-module=pydicom.encoders.gdcm ^
-  --include-module=pydicom.encoders.pylibjpeg ^
-  --include-module=pylibjpeg.libjpeg ^
+  --include-module=pydicom.pixels.decoders.pillow ^
+  --include-module=pydicom.pixels.decoders.rle ^
   --nofollow-import-to=matplotlib ^
   --nofollow-import-to=scipy ^
   --nofollow-import-to=IPython ^

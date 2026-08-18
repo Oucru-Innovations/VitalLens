@@ -18,10 +18,15 @@ Mỗi cặp gồm 3 file:
 gửi trùng) và nhật ký upload (`attempts`, `last_error`, `last_attempt_at`,
 `uploaded_at`) để hiển thị "cặp nào chưa lên và vì sao" sau khi mở lại app.
 Quét thư mục = tìm mọi `*.meta.json` rồi dựng lại danh sách.
+
+Module này cũng ghi luôn file CSV metadata (`write_csv`): backend loại file
+trùng theo **hash nội dung**, nên định dạng CSV là một phần của "cặp trên đĩa"
+chứ không phải chuyện của UI - xem docstring `write_csv`.
 """
 
 from __future__ import annotations
 
+import csv
 import json
 import logging
 import os
@@ -34,6 +39,13 @@ PENDING = "pending"
 UPLOADED = "uploaded"
 _WORKSPACE_FILE = ".vitallens_workspace.json"
 _META_SUFFIX = ".meta.json"
+
+# Cột nối CSV với PDF của cùng một cặp; cũng là thứ giữ cho nội dung CSV không
+# bao giờ trùng nhau (xem `write_csv`).
+CSV_FILE_COLUMN = "file_name"
+
+# Ký tự đầu ô mà Excel/Sheets hiểu là công thức → phải "thoát" khi ghi CSV.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 
 # =====================================================================
@@ -198,6 +210,64 @@ def delete_pair(export: dict) -> None:
 
 
 # =====================================================================
+# CSV metadata
+# =====================================================================
+
+
+def _csv_safe(value: str) -> str:
+    """Chống CSV formula injection: prefix ' cho ô bắt đầu bằng ký tự công thức."""
+
+    if value and value[0] in _CSV_FORMULA_PREFIXES:
+        return "'" + value
+    return value
+
+
+def write_csv(output_path: str, form: dict, pdf_name: str) -> None:
+    """Ghi (atomic) CSV metadata, kèm cột `file_name` = tên PDF của cặp.
+
+    Backend loại file trùng theo **hash nội dung** (không nhìn tên file) và
+    không sửa được. Không có cột này, hai cặp cùng bệnh nhân + cùng type + cùng
+    các mốc ngày cho ra CSV giống hệt nhau từng byte → server nuốt mất CSV thứ
+    hai: PDF lên được, metadata bị SÓT mà không ai báo lỗi. `pdf_name` là duy
+    nhất trong kho (xem `UploadPDFPage._unique_export_names`) nên mỗi CSV có
+    một nội dung riêng, đồng thời cho backend biết dòng này thuộc PDF nào.
+    """
+
+    row = dict(form, **{CSV_FILE_COLUMN: pdf_name})
+    safe_row = {k: _csv_safe(str(v)) for k, v in row.items()}
+    tmp = f"{output_path}.__tmp__"
+    with open(tmp, "w", newline="", encoding="utf-8-sig") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(row.keys()))
+        writer.writeheader()
+        writer.writerow(safe_row)
+    os.replace(tmp, output_path)
+
+
+def ensure_csv_file_name(export: dict) -> bool:
+    """Vá CSV lưu bằng bản cũ (chưa có cột `file_name`). True = đã ghi lại.
+
+    Những cặp còn nằm sẵn trong `pending/` từ trước khi có cột này vẫn dính lỗi
+    trùng hash, nên vá ngay trước lúc gửi thay vì bắt người dùng lưu lại tay.
+    """
+
+    path = export.get("csv_path") or ""
+    form = export.get("form_data") or {}
+    pdf_name = os.path.basename(export.get("pdf_path") or "")
+    if not path or not form or not pdf_name:
+        return False
+    try:
+        with open(path, encoding="utf-8-sig", newline="") as fh:
+            header = next(csv.reader(fh), [])
+        if CSV_FILE_COLUMN in header:
+            return False
+        write_csv(path, form, pdf_name)
+    except OSError as e:
+        log.warning("Không vá được cột %s cho %s: %s", CSV_FILE_COLUMN, path, e)
+        return False
+    log.info("Đã vá cột %s cho CSV cũ: %s", CSV_FILE_COLUMN, path)
+    return True
+
+# =====================================================================
 # Ghi nhớ thư mục làm việc gần nhất (để restart quét đúng chỗ)
 # =====================================================================
 
@@ -225,6 +295,7 @@ def save_workspace(app_dir: str, output_dir: str) -> None:
 __all__ = [
     "PENDING",
     "UPLOADED",
+    "CSV_FILE_COLUMN",
     "pending_dir",
     "uploaded_dir",
     "ensure_dirs",
@@ -234,4 +305,55 @@ __all__ = [
     "delete_pair",
     "load_workspace",
     "save_workspace",
+    "write_csv",
+    "ensure_csv_file_name",
 ]
+
+
+if __name__ == "__main__":
+    import tempfile
+
+    _FORM = {
+        "date": "18-08-2026",
+        "sid": "13NV",
+        "patient_code": "P001",
+        "type": "Hematology",
+        "other_type": "",
+        "sampling_date": "18-08-2026",
+        "receipt_date": "18-08-2026",
+        "result_date": "18-08-2026",
+    }
+    with tempfile.TemporaryDirectory() as _base:
+        ensure_dirs(_base)
+        _pending = pending_dir(_base)
+
+        # Hai cặp cùng form nhưng khác PDF → nội dung CSV PHẢI khác nhau, nếu
+        # không backend (loại trùng theo hash) sẽ nuốt mất cặp thứ hai.
+        _a = os.path.join(_pending, "a.csv")
+        _b = os.path.join(_pending, "b.csv")
+        write_csv(_a, _FORM, "HematologyImage_P001_1_.pdf")
+        write_csv(_b, _FORM, "HematologyImage_P001_2_.pdf")
+        _first = open(_a, "rb").read()
+        assert _first != open(_b, "rb").read(), "CSV trùng nội dung"
+        assert b"13NV" in _first, "thiếu cột SID"
+        assert b"HematologyImage_P001_1_.pdf" in _first, "thiếu cột file_name"
+
+        # Chống CSV formula injection khi mở bằng Excel/Sheets.
+        _c = os.path.join(_pending, "c.csv")
+        write_csv(_c, dict(_FORM, patient_code="=cmd|'/c calc'!A1"), "x.pdf")
+        assert b",'=cmd" in open(_c, "rb").read(), "thiếu prefix chống công thức"
+
+        # CSV bản cũ (thiếu cột file_name) phải được vá, và chỉ vá một lần.
+        _old = os.path.join(_pending, "old.csv")
+        with open(_old, "w", newline="", encoding="utf-8-sig") as _fh:
+            _fh.write("date,patient_code" + chr(10) + "18-08-2026,P001" + chr(10))
+        _exp = {
+            "csv_path": _old,
+            "pdf_path": os.path.join(_pending, "old.pdf"),
+            "form_data": _FORM,
+        }
+        assert ensure_csv_file_name(_exp) is True, "không vá CSV cũ"
+        assert b"old.pdf" in open(_old, "rb").read(), "vá xong vẫn thiếu file_name"
+        assert ensure_csv_file_name(_exp) is False, "vá lặp lần hai"
+
+    print("export_store OK")
