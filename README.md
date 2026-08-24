@@ -10,12 +10,15 @@ VitalLens is a Python/Tkinter desktop app for medical data processing. The proje
 | X-Ray Anonymization | Detect burned-in text with PaddleOCR and anonymize DICOM metadata |
 | OCR Review | Review OCR output from LAB / bedside monitor folders, correct JSON, and export Excel |
 | Lab PDF Upload | View PDFs, redact sensitive regions, fill metadata, save PDF + CSV, and optionally upload via API |
+| Upload File đã xử lý | Pick any already-processed files, auto-parse study/patient/type/date from the filename, and route each to SFTP or the HTTP API |
 
 ## Project Structure
 
 ```text
 VitalLens/
 ├── main.py                  # Entry point (sets Paddle env flags before UI)
+├── verify_catalog.py        # Standalone catalogue fingerprint check (also step 1 of build_nuitka.bat)
+├── smoke_nuitka.py          # Manual smoke test for a built EXE
 ├── requirements.txt         # Runtime deps (pinned)
 ├── requirements-build.txt   # Runtime + PyInstaller + Nuitka
 ├── build_exe.spec           # PyInstaller spec (onedir)
@@ -29,22 +32,30 @@ VitalLens/
 ├── docs/
 │   ├── RUNBOOK-build-release.md   # Build, verify, package, roll back
 │   └── RUNBOOK-secrets.md         # Issue / rotate / revoke tokens
+├── .github/workflows/
+│   ├── ci.yml            # compileall + tkinter-free module self-checks
+│   └── release.yml       # Tag → build → publish EXE + latest.json
 └── apps/
-    ├── __init__.py
+    ├── __init__.py          # __version__
     ├── app.py               # Root Tk window + page navigation
     ├── config.py            # Theme constants + Settings dataclass (env-aware)
     ├── logging_setup.py     # Centralized logging + Paddle env flags
+    ├── runtime_paths.py     # Locate bundle/app dirs under PyInstaller vs Nuitka
     ├── widgets/             # Shared UI widgets
     │   ├── buttons.py       # StyledButton
     │   ├── status.py        # StatusBar
     │   ├── header.py        # make_header / make_section
     │   ├── scrollable.py    # ScrollableFrame
     │   ├── dialogs.py       # Copyable info/warning/error + batch report
-    │   └── date_picker.py   # DatePicker (calendar popup)
+    │   ├── date_picker.py   # DatePicker (calendar popup)
+    │   ├── settings_dialog.py  # ⚙ Cấu hình kết nối popup → %APPDATA%\VitalLens\.env
+    │   ├── sftp.py          # SFTP login popup, shared across pages
+    │   └── upload_batch.py  # SFTP/HTTP upload-method chooser + batch runner
     ├── pages/               # UI layer (tkinter Frames)
     │   ├── home.py
     │   ├── xml_page.py
     │   ├── xray_page.py
+    │   ├── multi_upload_page.py   # Upload File đã xử lý (auto-route by filename)
     │   ├── ocr/             # OCR review (multi-file)
     │   │   ├── page.py      # UI shell
     │   │   ├── form_builder.py
@@ -53,13 +64,20 @@ VitalLens/
     │       └── page.py
     ├── services/            # Business logic + I/O (pure Python)
     │   ├── storage.py       # StorageBackend (Local + SFTP)
+    │   ├── sftp_session.py  # Singleton SFTP session shared across pages
     │   ├── payload_io.py    # JSON / CSV via storage
     │   ├── excel_export.py  # list[dict] → .xlsx
     │   ├── lab_records.py   # Scan PROCESSING directory
     │   ├── medical_catalog.py  # Catalogue lookup + integrity check
+    │   ├── mapping_excel.py    # Step-2 Excel, plain-mapping mode
+    │   ├── study_mapping.py    # Step-2 Excel, study-list mode (USUBJID/EMR_ID)
     │   ├── pdf_redact.py    # Render PDF + redact regions
     │   ├── export_store.py  # Durable pending/uploaded state (meta.json)
-    │   └── upload_api.py    # HTTP POST (PDF + CSV pair) + retry
+    │   ├── upload_api.py    # HTTP POST (PDF + CSV pair) / SFTP upload + retry
+    │   ├── update_check.py  # Poll UPDATE_MANIFEST_URL, never auto-installs
+    │   ├── user_config.py   # Reads/writes %APPDATA%\VitalLens\.env
+    │   └── parser/
+    │       └── file_name.py # FileNameParser — guesses study/patient/type/date
     └── processing/          # CPU-bound: OCR, XML decode
         ├── xml_to_excel.py
         └── xray.py          # PaddleOCR text removal + DICOM anonymization
@@ -254,6 +272,34 @@ changes the bytes and therefore the fingerprint.
 | XML → Excel | `MA_BS_DOC_KQ` omitted when picking sheet columns (it *is* decoded and held in memory — see caveat below); only `Include` services reach the main sheet; with a study list, `ID`/`MA_LK` give way to `MA_NTG` on the matched sheets | `processing/xml_to_excel.py` |
 | CSV export | Cells starting with `= + - @` are prefixed with `'` to block formula injection in Excel/Sheets | `services/export_store.py` |
 
+### Upload File đã xử lý — route by parsed filename
+
+`MultiUploadPage` lets the user pick any already-processed files (PDF, X-ray,
+ECG, Ultrasound, CT, MRI, …) and routes each one automatically instead of
+asking which pipe to use:
+
+```text
+  file path ──► FileNameParser.parse() ──► study / patient / data_type / date
+                                                      │
+                                    data_type in SFTP_TYPES?
+                                  ┌───────────────────┴────────────────────┐
+                                 yes                                      no
+                                  │                                        │
+                                  ▼                                        ▼
+     SFTP  <SFTP_BUFFER_PATH>/<study>/<patient>/<date>/<data_type>/   HTTP  same endpoint as
+                                                                       Lab PDF Upload
+```
+
+- `apps/services/parser/file_name.py` guesses study / patient / data type /
+  date from the path using the same conventions as the existing OUCRU data
+  pipeline; any field it gets wrong is editable in place (double-click a cell).
+- `Xray/ECG/Ultrasound/CT/MRI/Others` route to SFTP, grouped into one job per
+  `<study>/<patient>/<date>/<data_type>` folder; `Image`/`Metadata` route to
+  the HTTP API. A file missing patient, date, or data type — or an SFTP file
+  missing study — is blocked from upload until fixed in the table.
+- A file that fails upload stays in the list with its error shown so it can be
+  retried without re-picking every other file.
+
 ## Requirements
 
 - **OS**: Windows (primary target for running and building)
@@ -388,6 +434,7 @@ API_UPLOAD_OWNER=you@example.org
 # SFTP_PORT=22
 # SFTP_DEMO_MODE=false
 # SFTP_PATH=/EI_SHARE/.received/13NV/PROCESSING
+# SFTP_BUFFER_PATH=/EI_SHARE/.received/VITAL-LOG
 ```
 
 Important keys:
@@ -396,7 +443,8 @@ Important keys:
 - `API_BEARER_TOKEN` — Bearer token appended as `Authorization: Bearer ...`.
 - `API_UPLOAD_OWNER` — Default value pre-filled in the owner-email prompt.
 - `SFTP_DEMO_MODE=true` — Use local folders instead of a real SFTP server.
-- `SFTP_HOST`, `SFTP_PORT`, `SFTP_PATH` — SFTP connection settings.
+- `SFTP_HOST`, `SFTP_PORT`, `SFTP_PATH` — SFTP connection settings; `SFTP_PATH` is the OCR review page's PROCESSING root.
+- `SFTP_BUFFER_PATH` — Destination root for **Upload File đã xử lý**'s SFTP-routed files (`Xray/ECG/Ultrasound/CT/MRI/Others`). Empty = that route is blocked with a warning.
 - `UPDATE_MANIFEST_URL` — Optional URL of a small public JSON (`{"version": "0.4.0", "url": "..."}`). The home page then shows "a new version is available" with a download link. The app never downloads or installs anything itself. Unset (default) = no outbound request at all.
 
 OS-level environment variables win over `.env` (`override=False`), which is handy
@@ -470,6 +518,10 @@ folder, nothing to zip. This is what `release.yml` runs on tag and what end user
 download. Budget 30–90 minutes for the first build (it compiles paddle); the
 PyInstaller path above stays for fast local packaging and debugging.
 
+Step 1 of the script runs `verify_catalog.py`, the same catalogue fingerprint
+check `build_exe.spec` does for PyInstaller, so a mismatch aborts before Nuitka
+even starts compiling.
+
 If a `.env` sits at the repo root, `build_nuitka.bat` **stops by default**. For a
 controlled internal-only build, `set VITALLENS_EMBED_ENV=1` opts in to embedding
 and prints a `[WARN]` block. Anyone holding that EXE can extract the token; never
@@ -528,9 +580,10 @@ The X-Ray text removal uses PaddleOCR with configurable confidence filters to pr
 
 | Parameter | Default | Description |
 | --- | --- | --- |
-| `OCR_REC_SCORE_THRESHOLD` | 0.6 | Recognition confidence — skip text recognized with < 60% confidence |
-| `OCR_DET_SCORE_THRESHOLD` | 0.5 | Detection confidence — skip text regions detected with < 50% confidence |
+| `OCR_DET_SCORE_THRESHOLD` | 0.8 | Detection confidence — skip text regions detected with < 80% confidence |
+| `OCR_REC_SCORE_THRESHOLD` | 0.8 | Recognition confidence — skip text recognized with < 80% confidence |
 | `OCR_MIN_TEXT_LENGTH` | 2 | Skip results with fewer than 2 characters |
+| `OCR_MIN_BBOX_AREA` | 100 | Skip detections smaller than 100 px² (width × height) — filters tiny noise |
 
 These constants are defined at the top of `apps/processing/xray.py`. Increase thresholds to reduce false positives; decrease to catch more real text.
 
