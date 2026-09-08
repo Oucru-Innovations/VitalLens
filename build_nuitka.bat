@@ -109,6 +109,12 @@ if not exist ".env" echo [INFO] Khong co .env - build sach, nguoi dung tu nhap q
 ::       pillow (JPEG/JPEG2000), pylibjpeg-libjpeg (JPEG lossless/JPEG-LS),
 ::       va rle thuan Python. pylibjpeg-libjpeg con tim codec qua entry point,
 ::       nen phai kem ca module `_libjpeg` + distribution metadata ben duoi.
+::   --include-distribution-metadata=opencv-contrib-python/... : paddlex
+::       (utils/deps.py) quyet dinh co `import cv2` hay khong bang
+::       importlib.metadata.version(<ten dist>). Ten dist la chuoi dong nen
+::       Nuitka khong tu phat hien; thieu dist-info thi paddlex im lang bo
+::       qua import va no `NameError: name 'cv2' is not defined` giua
+::       pipeline OCR. Danh sach duoi day = paddlex[ocr-core].
 echo.
 echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
 "%PYTHON_EXE%" -m nuitka main.py ^
@@ -154,6 +160,13 @@ echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
   --include-module=pydicom.pixels.decoders.rle ^
   --include-module=_libjpeg ^
   --include-distribution-metadata=pylibjpeg-libjpeg ^
+  --include-distribution-metadata=opencv-contrib-python ^
+  --include-distribution-metadata=shapely ^
+  --include-distribution-metadata=pyclipper ^
+  --include-distribution-metadata=python-bidi ^
+  --include-distribution-metadata=imagesize ^
+  --include-distribution-metadata=pypdfium2 ^
+  --include-distribution-metadata=pillow ^
   --nofollow-import-to=matplotlib ^
   --nofollow-import-to=scipy ^
   --nofollow-import-to=IPython ^

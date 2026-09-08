@@ -115,6 +115,33 @@ def _deploy_bundled_models():
                     shutil.copy2(f, dst / f.name)
 
 
+# paddlex/utils/deps.py chỉ chạy `import cv2` (và vài thư viện khác) khi
+# importlib.metadata.version(<tên dist>) tìm thấy dist-info. Bản đóng gói thiếu
+# metadata thì paddlex im lặng bỏ qua import, rồi vỡ ra `NameError: name 'cv2'
+# is not defined` ở giữa pipeline — không nói gì về nguyên nhân thật.
+_PADDLEX_OCR_DEPS = (
+    'opencv-contrib-python', 'shapely', 'pyclipper',
+    'python-bidi', 'imagesize', 'pypdfium2', 'pillow',
+)
+
+
+def _check_paddlex_deps():
+    """Báo lỗi đúng nguyên nhân khi bundle thiếu dist-info của paddlex[ocr-core]."""
+    try:
+        from paddlex.utils.deps import is_dep_available
+    except ImportError:
+        return  # paddlex đổi API: bỏ qua, đừng để lớp kiểm tra thành lỗi chính
+
+    missing = [d for d in _PADDLEX_OCR_DEPS if not is_dep_available(d)]
+    if missing:
+        raise RuntimeError(
+            "Bản đóng gói thiếu metadata (dist-info) của: " + ", ".join(missing)
+            + ".\nPaddleOCR sẽ không nạp được các thư viện này. Build lại với "
+            "--include-distribution-metadata (Nuitka) hoặc copy_metadata "
+            "(PyInstaller) cho các package trên."
+        )
+
+
 def _get_ocr():
     """Lazy-initialize PaddleOCR with detection + recognition (thread-safe).
 
@@ -127,6 +154,7 @@ def _get_ocr():
     with _ocr_lock:
         if _ocr is None:
             _deploy_bundled_models()
+            _check_paddlex_deps()
             from paddleocr import PaddleOCR
             _ocr = PaddleOCR(
                 text_detection_model_name='PP-OCRv5_mobile_det',

@@ -57,6 +57,18 @@ for _pkg in _PACKAGES_TO_COLLECT:
 # bundle dù chạy từ source hoàn toàn bình thường.
 _all_datas += copy_metadata('pylibjpeg-libjpeg')
 
+# paddlex/utils/deps.py quyết định có `import cv2` hay không bằng
+# importlib.metadata.version(<tên dist>). Thiếu dist-info thì paddlex im lặng bỏ
+# qua import và vỡ ra `NameError: name 'cv2' is not defined` giữa pipeline OCR.
+# collect_all() ở trên đi theo TÊN IMPORT nên không phủ được các dist mà tên
+# khác tên import (cv2 -> opencv-contrib-python, PIL -> pillow). Danh sách này
+# là paddlex[ocr-core].
+for _dist in (
+    'opencv-contrib-python', 'shapely', 'pyclipper',
+    'python-bidi', 'imagesize', 'pypdfium2', 'pillow',
+):
+    _all_datas += copy_metadata(_dist)
+
 # Ensure critical native libraries are included
 for _lib_pkg in ('paddle', 'pypdfium2'):
     try:
