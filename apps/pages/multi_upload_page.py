@@ -34,6 +34,7 @@ from apps.config import (
     FG_TEXT,
     SFTP_BUFFER_PATH,
 )
+from apps.services.file_scan import list_files_recursive
 from apps.services.parser.file_name import FileNameParser
 from apps.services.upload_api import (
     HttpUploader,
@@ -113,6 +114,15 @@ class MultiUploadPage(tk.Frame):
         pick_btn.bind("<Button-1>", lambda e: self._pick_files())
         pick_btn.bind("<Enter>", lambda e: pick_btn.config(bg=BTN_HOVER_BLUE))
         pick_btn.bind("<Leave>", lambda e: pick_btn.config(bg=ACCENT_BLUE))
+
+        pick_folder_btn = tk.Label(
+            btn_row, text="  Chọn thư mục...  ", font=("Helvetica", 12, "bold"),
+            bg=ACCENT_BLUE, fg="#ffffff", cursor="hand2", padx=10, pady=6,
+        )
+        pick_folder_btn.pack(side="left", padx=(8, 0))
+        pick_folder_btn.bind("<Button-1>", lambda e: self._pick_folder())
+        pick_folder_btn.bind("<Enter>", lambda e: pick_folder_btn.config(bg=BTN_HOVER_BLUE))
+        pick_folder_btn.bind("<Leave>", lambda e: pick_folder_btn.config(bg=ACCENT_BLUE))
 
         remove_btn = tk.Label(
             btn_row, text="  Xóa khỏi danh sách  ", font=("Helvetica", 11, "bold"),
@@ -218,6 +228,23 @@ class MultiUploadPage(tk.Frame):
         )
         if not files:
             return
+        self._add_files(files)
+
+    def _pick_folder(self):
+        folder = filedialog.askdirectory(
+            title="Chọn thư mục chứa file 13NV (bao gồm cả thư mục con)",
+        )
+        if not folder:
+            return
+        files = list_files_recursive(folder)
+        if not files:
+            messagebox.showinfo(
+                "Thư mục trống", "Không tìm thấy file nào trong thư mục đã chọn."
+            )
+            return
+        self._add_files(files)
+
+    def _add_files(self, files) -> None:
         existing = set(self.files)
         for f in files:
             if f not in existing:
