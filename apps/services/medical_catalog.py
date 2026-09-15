@@ -64,7 +64,7 @@ CATALOG_FILENAME = "database_medical.csv"
 #     python -c "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('database/database_medical.csv').read_bytes()).hexdigest())"
 #
 # (thông báo lỗi khi lệch cũng in sẵn vân tay đọc được, copy thẳng vào đây).
-CATALOG_SHA256 = "3dd8c447a4e474fd7c2579100ed82365062bc1d5364b42e79d1834272b92cc94"
+CATALOG_SHA256 = "76202ae0af759bc8924359e0bad09614cab9c935f060324fdaf65f5f6e7ce95c"
 
 # Tên cột trong file CSV.
 COL_ID = "ID_SERVICE"
