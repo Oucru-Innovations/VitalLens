@@ -26,6 +26,7 @@ jobs:
         # không chắc có sẵn Tcl/Tk.
         run: |
           python -m apps.config
+          python -m apps.runtime_paths
           python -m apps.services.update_check
           python -m apps.services.user_config
           python -m apps.services.export_store

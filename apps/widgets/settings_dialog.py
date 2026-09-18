@@ -2,9 +2,9 @@
 
 Bước hỏng nhiều nhất trong hướng dẫn cài đặt là "đổi tên `.env.example` thành
 `.env` rồi mở bằng Notepad": Windows Explorer không cho đặt tên bắt đầu bằng
-dấu chấm, và người dùng hay sửa nhầm định dạng. Dialog này ghi thẳng vào
-`%APPDATA%\\VitalLens\\.env` (xem `apps/services/user_config.py`) nên bản phát
-hành không cần kèm file config nào.
+dấu chấm, và người dùng hay sửa nhầm định dạng. Dialog này ghi thẳng vào `.env`
+CẠNH EXE (xem `apps/services/user_config.py`; lui về `%APPDATA%\\VitalLens\\.env`
+khi thư mục đó chỉ-đọc) nên bản phát hành không cần kèm file config nào.
 
 Giữ nguyên phong cách popup đăng nhập SFTP ở `apps/widgets/sftp.py`.
 """

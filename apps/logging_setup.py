@@ -13,7 +13,7 @@ import warnings
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from apps.runtime_paths import is_frozen
+from apps.runtime_paths import is_frozen, writable_exe_dir
 
 
 _NOISY_LOGGERS = (
@@ -32,16 +32,20 @@ _LOG_BACKUP_COUNT = 3
 
 
 def _resolve_log_dir() -> Path:
-    """Thư mục ghi log: %LOCALAPPDATA%\\VitalLens khi đóng gói, thư mục gốc
-    repo khi chạy từ source.
+    """``<thư mục chứa EXE>/logs``; lui về %LOCALAPPDATA% khi không ghi được.
 
-    KHÔNG dùng thư mục cạnh EXE (``dist\\VitalLens\\``, nơi ``apps.config``
-    trỏ tới) — đó là thư mục bị zip nguyên vẹn và gửi cho end-user (xem README
-    "Ship to End Users"). Log có thể mang patient_code (nhúng trong tên file
-    PDF/CSV, xem `apps.pages.upload.page`) nên phải nằm ngoài mọi thứ có thể
-    lọt vào bản release; `build.bat` cũng chỉ quét `.env`/`env`/
-    `config_debug.log`, không quét `logs/`. %LOCALAPPDATA% là thư mục riêng
-    của từng máy, không bao giờ nằm trong `dist\\`.
+    Mặc định cạnh EXE vì hỗ trợ từ xa luôn phải bắt đầu bằng "gửi tôi file
+    log" — bảo người dùng mở đúng thư mục họ vừa bấm vào EXE thì được, bảo họ
+    gõ %LOCALAPPDATA% thì không. Chạy từ source thì vẫn là thư mục gốc repo.
+
+    Lý do cũ để tránh chỗ này đã hết hiệu lực: hồi đó bản phát hành là thư mục
+    onedir bị zip nguyên vẹn gửi cho end-user, log dính patient_code (nhúng
+    trong tên file PDF/CSV, xem `apps.pages.upload.page`) sẽ đi theo. Bản
+    onefile bây giờ chỉ là một EXE, không có thư mục nào để zip.
+
+    CÒN LẠI một rủi ro: EXE đặt trên ổ mạng dùng chung thì mọi người ghi vào
+    cùng một file log và đọc được patient_code của nhau. Ai làm vậy nên đặt
+    VITALLENS_LOG_DIR trỏ về máy mình.
 
     Dùng ``apps.runtime_paths`` (chỉ stdlib, không tác dụng phụ) chứ KHÔNG
     import ``apps.config`` — thứ tự import ở main.py là load-bearing (patch
@@ -49,10 +53,17 @@ def _resolve_log_dir() -> Path:
     ``apps.config`` nạp ``.env`` ngay lúc import.
     """
 
-    if is_frozen():
-        base = Path(os.environ.get("LOCALAPPDATA") or Path.home())
-        return base / "VitalLens" / "logs"
-    return Path(__file__).resolve().parent.parent / "logs"
+    override = os.environ.get("VITALLENS_LOG_DIR", "").strip()
+    if override:
+        return Path(override)
+    if not is_frozen():
+        return Path(__file__).resolve().parent.parent / "logs"
+    beside_exe = writable_exe_dir()
+    if beside_exe is not None:
+        return beside_exe / "logs"
+    # Program Files / ổ mạng chỉ-đọc: không ghi nổi cạnh EXE thì vẫn phải có log.
+    base = Path(os.environ.get("LOCALAPPDATA") or Path.home())
+    return base / "VitalLens" / "logs"
 
 
 def setup_logging(level: int | str = logging.INFO) -> None:

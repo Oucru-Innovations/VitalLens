@@ -119,13 +119,14 @@ def _load_dotenv_if_present(app_dir: Path) -> None:
     Đọc theo thứ tự ưu tiên, **nạp hết** chứ không dừng ở file đầu tiên
     (``override=False`` nên file nào đặt khoá trước thì file đó thắng):
 
-    1. ``%APPDATA%\\VitalLens\\.env`` — config riêng của người dùng, nằm
-       NGOÀI thư mục app nên không mất khi giải nén đè bản mới và không đi
-       theo khi ai đó copy thư mục app cho đồng nghiệp. Xem
+    1. ``USER_ENV_PATH`` — chỗ dialog Cài đặt ghi ra. Mặc định là
+       ``<app_dir>/.env`` (cạnh EXE); chỉ khi thư mục đó không ghi được nó
+       mới là ``%APPDATA%\\VitalLens\\.env``. Xem
        ``apps/services/user_config.py``.
-    2. ``<app_dir>/.env`` rồi ``<app_dir>/env`` — cách cũ, giữ để bản cài sẵn
-       của người dùng hiện tại không hỏng. Tên không dấu chấm là vì Windows
-       Explorer từ chối tạo file bắt đầu bằng dấu chấm.
+    2. ``<app_dir>/.env`` rồi ``<app_dir>/env`` — trùng mục 1 ở trường hợp
+       thường (đã khử trùng bằng ``dict.fromkeys``), và là chỗ đọc duy nhất
+       cho máy đang chạy bản có config ở %APPDATA%. Tên không dấu chấm là vì
+       Windows Explorer từ chối tạo file bắt đầu bằng dấu chấm.
     3. ``<bundle_dir>/.env`` — bản `.env` được NHÚNG vào binary lúc build
        (``build_nuitka.bat``). Đứng CUỐI vì nó chỉ là giá trị mặc định xuất
        xưởng: mọi file của người dùng ở trên, và biến môi trường OS, đều đè
@@ -172,9 +173,11 @@ def _load_dotenv_if_present(app_dir: Path) -> None:
     candidates = [USER_ENV_PATH, app_dir / ".env", app_dir / "env"]
     bundled = bundle_dir()
     if bundled is not None:
-        # dict.fromkeys: bản Nuitka standalone (không onefile) có
-        # bundle_dir() == app_dir → tránh nạp và log cùng một file hai lần.
-        candidates = list(dict.fromkeys(candidates + [bundled / ".env"]))
+        candidates.append(bundled / ".env")
+    # dict.fromkeys: USER_ENV_PATH giờ mặc định là `<app_dir>/.env` (xem
+    # user_config), và bản Nuitka standalone (không onefile) có
+    # bundle_dir() == app_dir → tránh nạp và log cùng một file hai lần.
+    candidates = list(dict.fromkeys(candidates))
 
     loaded_any = False
     for candidate in candidates:

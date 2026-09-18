@@ -31,7 +31,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-__all__ = ["is_frozen", "bundle_dir", "exe_dir"]
+__all__ = ["is_frozen", "bundle_dir", "exe_dir", "writable_exe_dir"]
 
 
 def is_frozen() -> bool:
@@ -76,10 +76,37 @@ def exe_dir() -> Path | None:
     return None
 
 
+def writable_exe_dir() -> Path | None:
+    """``exe_dir()`` nếu THẬT SỰ ghi được vào đó, ngược lại ``None``.
+
+    Dùng cho những thứ app phải tự ghi (log, `.env` do dialog Cài đặt lưu):
+    mặc định đặt cạnh EXE để người dùng mở thư mục là thấy, không phải lần mò
+    %APPDATA%/%LOCALAPPDATA%. Nhưng EXE có thể nằm ở `C:\\Program Files` hoặc
+    một ổ mạng chỉ-đọc — lúc đó phải lui về thư mục profile chứ không được để
+    app chết vì không ghi nổi log.
+
+    Thử ghi thật chứ không dùng ``os.access``: trên Windows ``os.access`` đọc
+    cờ read-only của file chứ không hỏi ACL, nên nó báo ghi được ở cả những
+    thư mục mà ghi vào sẽ ném PermissionError.
+    """
+
+    directory = exe_dir()
+    if directory is None:
+        return None
+    probe = directory / ".vitallens-write-test"
+    try:
+        probe.touch()
+        probe.unlink()
+    except OSError:
+        return None
+    return directory
+
+
 if __name__ == "__main__":
     import types
 
     assert not is_frozen() and bundle_dir() is None and exe_dir() is None
+    assert writable_exe_dir() is None, "chay tu source thi khong co exe_dir"
 
     sys.frozen = True                                    # giả lập PyInstaller
     sys._MEIPASS = str(Path.cwd() / "_internal")
@@ -98,4 +125,20 @@ if __name__ == "__main__":
     assert bundle_dir() == Path(sys.executable).resolve().parent  # chỗ bung tạm
     assert exe_dir() == Path.cwd() / "dist"                       # chỗ user bấm
     assert bundle_dir() != exe_dir(), "hai đường dẫn onefile phải khác nhau"
+
+    # writable_exe_dir: ghi được thì trả về chính nó, không ghi được thì None.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        globals()["__compiled__"] = types.SimpleNamespace(
+            containing_dir=tmp, onefile=True, standalone=True
+        )
+        assert writable_exe_dir() == Path(tmp)
+        assert not (Path(tmp) / ".vitallens-write-test").exists(), "phai don file thu"
+
+    globals()["__compiled__"] = types.SimpleNamespace(
+        containing_dir=str(Path(tempfile.gettempdir()) / "khong-ton-tai-vitallens"),
+        onefile=True, standalone=True,
+    )
+    assert writable_exe_dir() is None, "thu muc khong ghi duoc phai tra ve None"
     print("runtime_paths OK")

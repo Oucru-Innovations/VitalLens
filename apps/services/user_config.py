@@ -34,12 +34,30 @@ import os
 from pathlib import Path
 from typing import Mapping
 
+from apps.runtime_paths import writable_exe_dir
+
 __all__ = ["USER_CONFIG_DIR", "USER_ENV_PATH", "save_user_env"]
 
 
 def _user_config_dir() -> Path:
-    """`%APPDATA%\\VitalLens` trên Windows, `~/.config/VitalLens` chỗ khác."""
+    """Thư mục chứa EXE; lui về `%APPDATA%\\VitalLens` khi không ghi được ở đó.
 
+    Mặc định cạnh EXE để mọi thứ của app nằm cùng một chỗ người dùng nhìn thấy
+    — `config.py` vốn đã đọc `<app_dir>/.env` nên đây chỉ là đổi CHỖ GHI của
+    dialog Cài đặt cho khớp với chỗ đọc, không thêm đường nạp mới.
+
+    Đánh đổi so với cách cũ (%APPDATA%, xem docstring module): token giờ nằm
+    cạnh EXE, nên copy nguyên thư mục app cho đồng nghiệp là copy luôn token,
+    và EXE đặt trên ổ mạng dùng chung nghĩa là chung một token. Đặt
+    VITALLENS_CONFIG_DIR để tách ra lại khi cần.
+    """
+
+    override = os.environ.get("VITALLENS_CONFIG_DIR", "").strip()
+    if override:
+        return Path(override)
+    beside_exe = writable_exe_dir()
+    if beside_exe is not None:
+        return beside_exe
     base = os.environ.get("APPDATA")
     return Path(base) / "VitalLens" if base else Path.home() / ".config" / "VitalLens"
 

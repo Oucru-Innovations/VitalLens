@@ -48,7 +48,7 @@ VitalLens/
     │   ├── scrollable.py    # ScrollableFrame
     │   ├── dialogs.py       # Copyable info/warning/error + batch report
     │   ├── date_picker.py   # DatePicker (calendar popup)
-    │   ├── settings_dialog.py  # ⚙ Cấu hình kết nối popup → %APPDATA%\VitalLens\.env
+    │   ├── settings_dialog.py  # ⚙ Cấu hình kết nối popup → .env cạnh EXE
     │   ├── sftp.py          # SFTP login popup, shared across pages
     │   └── upload_batch.py  # SFTP/HTTP upload-method chooser + batch runner
     ├── pages/               # UI layer (tkinter Frames)
@@ -75,7 +75,7 @@ VitalLens/
     │   ├── export_store.py  # Durable pending/uploaded state (meta.json)
     │   ├── upload_api.py    # HTTP POST (PDF + CSV pair) / SFTP upload + retry
     │   ├── update_check.py  # Poll UPDATE_MANIFEST_URL, never auto-installs
-    │   ├── user_config.py   # Reads/writes %APPDATA%\VitalLens\.env
+    │   ├── user_config.py   # Reads/writes .env beside the EXE (falls back to %APPDATA%)
     │   └── parser/
     │       └── file_name.py # FileNameParser — guesses study/patient/type/date
     └── processing/          # CPU-bound: OCR, XML decode
@@ -392,7 +392,7 @@ Runtime defaults live in `apps/config.py` (`Settings` dataclass). Secrets and pe
 
 At startup `apps/config.py` loads **every** file below, in this order, into `os.environ` without overriding what is already set — so the first file to define a key wins, and OS-level env vars beat all of them:
 
-1. `%APPDATA%\VitalLens\.env` — per-user config written by the in-app settings dialog. Lives **outside** the app folder, so it survives replacing the EXE and does not travel when someone copies the app folder to a colleague. (`~/.config/VitalLens/.env` off Windows.)
+1. `<app root>\.env` — per-user config written by the in-app settings dialog. It sits next to `VitalLens.exe` so everything the app owns is in one place the user can see. When that folder is not writable (Program Files, a read-only share) the dialog falls back to `%APPDATA%\VitalLens\.env` (`~/.config/VitalLens/.env` off Windows); `VITALLENS_CONFIG_DIR` overrides both. **Because the token now lives beside the EXE, copying the app folder to a colleague copies the token, and an EXE on a shared drive means one shared token** — use the override in those cases.
 2. `<app root>\.env` — the original location, still read for existing installs.
 3. `<app root>\env` — fallback, handy on Windows where Explorer refuses to create filenames starting with a dot.
 4. `<bundle root>\.env` — only present when a manual Nuitka build deliberately embeds the repo-root `.env`; it has the lowest file priority.
@@ -413,7 +413,7 @@ builds on a clean CI runner and checks again immediately before compilation.
 controlled internal build can explicitly opt in with `VITALLENS_EMBED_ENV=1`,
 but its value is extractable and that EXE must never be published.
 
-End users normally do not edit a file by hand: run the app, click **⚙ Cấu hình kết nối** at the bottom of the home page, fill in server address + token, save, restart. That writes `%APPDATA%\VitalLens\.env` (see `apps/services/user_config.py`). An `http://` address to anything but localhost is warned about and requires a second click — the bearer token would otherwise travel in cleartext.
+End users normally do not edit a file by hand: run the app, click **⚙ Cấu hình kết nối** at the bottom of the home page, fill in server address + token, save, restart. That writes `.env` next to `VitalLens.exe` (see `apps/services/user_config.py`). An `http://` address to anything but localhost is warned about and requires a second click — the bearer token would otherwise travel in cleartext.
 
 Editing a file by hand still works, e.g. when running from source:
 
@@ -459,7 +459,7 @@ for a temporary override without editing the file.
   `build_nuitka.bat` rejects repo-root `.env` by default, and CI asserts it is
   absent immediately before compilation.
 
-`%APPDATA%\VitalLens\.env` is plaintext and therefore readable, editable, and
+The per-user `.env` is plaintext and therefore readable, editable, and
 deletable by the same Windows account that runs VitalLens. There is no Nuitka
 option or file ACL that can simultaneously let an app running as that user read
 the token while making it impossible for that user to change it. DPAPI or
@@ -569,7 +569,7 @@ For a hand-built copy:
    log contains `[INFO] Khong co .env` **and** ends with `Build complete`.
 2. Send `dist_nuitka\VitalLens.exe` — one file, no ZIP, no folder.
 3. Send the user's token through a separate channel (password manager or encrypted message), never alongside the EXE.
-4. The user fills in URL + token via **⚙ Cấu hình kết nối** on the home page; it writes `%APPDATA%\VitalLens\.env`, so later changes need no rebuild.
+4. The user fills in URL + token via **⚙ Cấu hình kết nối** on the home page; it writes `.env` next to the EXE, so later changes need no rebuild.
 
 Step-by-step build, verification, packaging, and rollback procedures are in
 **[docs/RUNBOOK-build-release.md](docs/RUNBOOK-build-release.md)**.
