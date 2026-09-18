@@ -1,34 +1,56 @@
 """Kiểm tra bản cập nhật — chỉ BÁO, không tự cài.
 
-Vì sao chỉ báo mà không tự cập nhật: bundle onedir nặng ~700 MB và Windows khoá
-chính file EXE đang chạy, nên muốn tự thay thư mục phải sinh thêm một tiến trình
-phụ đứng ngoài chờ app thoát. Với quy mô hiện tại (phát hành vài lần một năm,
-người dùng nội bộ) chi phí đó không đáng — người dùng bấm link, tải ZIP, giải
-nén đè là xong. PyUpdater/Esky giải bài toán này nhưng cả hai đều đã ngừng bảo
-trì (Esky 2016/Python 2, PyUpdater 2021), thêm vào là nhận nợ ngay ngày đầu.
+Nguồn mặc định là GitHub Releases của chính repo (``UPDATE_DEFAULT_URL``). Repo
+đã public nên API ``/releases/latest`` đọc được mà không cần token; app chỉ gửi
+một GET ẩn danh, không kèm dữ liệu gì của người dùng.
 
-Manifest là một file JSON nhỏ, PUBLIC, KHÔNG chứa token:
+Chấp nhận hai dạng JSON, tự nhận ra bằng tên khoá:
 
-    {"version": "0.4.0", "url": "https://.../releases/latest"}
+    GitHub API : {"tag_name": "v1.0.0", "html_url": "https://github.com/..."}
+    Manifest   : {"version": "1.0.0",   "url": "https://..."}
 
-``.github/workflows/release.yml`` sinh file này mỗi lần tag. Nơi host là lựa
-chọn của người vận hành (server API sẵn có, GitHub Pages, ...) vì repo đang
-private nên URL asset của Release đòi đăng nhập.
+Dạng manifest giữ lại cho trường hợp tự host (GitHub Pages, server API nội bộ)
+— ``.github/workflows/release.yml`` vẫn sinh ``latest.json`` mỗi lần tag.
 
-``UPDATE_MANIFEST_URL`` rỗng (mặc định) = tắt hẳn, không có request nào đi ra.
+Vì sao chỉ báo mà không tự thay EXE: bản Nuitka onefile chỉ là một file nên về
+kỹ thuật thay được (đổi tên file đang chạy rồi ghi đè), nhưng tự tải và tự chạy
+một binary mới là thêm một đường đưa mã lạ vào máy xử lý dữ liệu bệnh nhân.
+Người dùng bấm link, tải EXE từ trang Release, chép đè — đủ cho nhịp phát hành
+vài lần một năm.
+
+``UPDATE_MANIFEST_URL`` đặt rỗng trong ``.env`` = tắt hẳn, không request nào đi
+ra.
+
+So sánh version phải hiểu bản tiền phát hành: ``1.0.0-rc1`` < ``1.0.0``. Cách
+tách số cũ gom mọi chữ số lại nên ``'1.0.0-rc1'`` ra ``(1, 0, 1)`` — báo NGƯỢC:
+người đang chạy rc1 không bao giờ thấy bản 1.0.0 chính thức, còn người dùng bản
+chính thức thì bị rủ "nâng cấp" xuống rc.
+
+Module cố ý chỉ dùng thư viện chuẩn (``requests`` import trong hàm): CI chạy
+``python -m apps.services.update_check`` trên runner trắng, không cài
+requirements. Vì thế không dùng ``packaging.version`` dù nó đúng hơn.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from typing import NamedTuple
 
 log = logging.getLogger(__name__)
 
-__all__ = ["Update", "check_for_update", "is_newer"]
+__all__ = ["UPDATE_DEFAULT_URL", "Update", "check_for_update", "is_newer"]
 
 # (connect, read) — cùng kiểu tách timeout như upload_api.
 _TIMEOUT = (3, 5)
+
+# ponytail: /releases/latest của GitHub BỎ QUA bản prerelease. Đúng với ý đồ —
+# người dùng bản chính thức không bị rủ nâng lên rc. Người đang chạy rc muốn
+# thấy rc kế tiếp thì trỏ UPDATE_MANIFEST_URL sang .../releases (số nhiều) và
+# đọc phần tử đầu; chỉ làm khi thật sự cần.
+UPDATE_DEFAULT_URL = (
+    "https://api.github.com/repos/Oucru-Innovations/VitalLens/releases/latest"
+)
 
 
 class Update(NamedTuple):
@@ -36,34 +58,44 @@ class Update(NamedTuple):
     url: str
 
 
-def _parts(version: str) -> tuple[int, ...]:
-    """``'v1.2.3'`` → ``(1, 2, 3)``.
+# `v1.0.0`, `1.0`, `1.0.0-rc1`, `1.0.0rc1` — nhóm: số, nhãn chữ, số của nhãn.
+_VERSION_RE = re.compile(r"^v?(\d+(?:\.\d+)*)(?:[-_.]?([A-Za-z]+)\.?(\d*))?$")
 
-    Dừng ở đoạn đầu tiên không có chữ số: ``'1.2.0rc1'`` → ``(1, 2, 0)``. Bản
-    pre-release không so sánh được chính xác nên coi như bản chính thức cùng số.
+
+def _key(version: str) -> tuple[int, ...] | None:
+    """Khoá sắp xếp, ``None`` khi chuỗi không phải version.
+
+    Hai phần tử cuối là hạng tiền phát hành: bản chính thức ``(1, 0)`` luôn lớn
+    hơn mọi bản có hậu tố ``(0, n)`` cùng số.
+
+    ponytail: mọi nhãn chữ (alpha/beta/rc) cùng hạng — repo chỉ phát hành `rc`.
+    Cần phân biệt alpha < beta < rc thì đổi `(0, n)` thành `(rank(label), n)`.
     """
 
-    out: list[int] = []
-    for chunk in version.strip().lstrip("vV").split("."):
-        digits = "".join(c for c in chunk if c.isdigit())
-        if not digits:
-            break
-        out.append(int(digits))
-    return tuple(out)
+    match = _VERSION_RE.match(version.strip())
+    if not match:
+        return None
+    nums = tuple(int(p) for p in match.group(1).split("."))
+    nums += (0,) * (3 - len(nums))  # '1.0' và '1.0.0' là một
+    if not match.group(2):
+        return nums + (1, 0)
+    return nums + (0, int(match.group(3) or 0))
 
 
 def is_newer(remote: str, local: str) -> bool:
     """True khi ``remote`` mới hơn ``local``. Chuỗi rác → False (không báo bừa)."""
 
-    remote_parts = _parts(remote)
-    return bool(remote_parts) and remote_parts > _parts(local)
+    remote_key, local_key = _key(remote), _key(local)
+    if remote_key is None or local_key is None:
+        return False
+    return remote_key > local_key
 
 
 def check_for_update(current_version: str, manifest_url: str) -> Update | None:
-    """Đọc manifest, trả về ``Update`` khi có bản mới hơn, ngược lại ``None``.
+    """Đọc manifest/GitHub API, trả về ``Update`` khi có bản mới hơn.
 
-    Nuốt mọi lỗi: mạng hỏng, JSON sai, server 500 — không có cái nào đáng để
-    làm hỏng lúc khởi động app.
+    Nuốt mọi lỗi: mạng hỏng, JSON sai, server 500, rate limit của GitHub —
+    không có cái nào đáng để làm hỏng lúc khởi động app.
     """
 
     if not manifest_url.strip():
@@ -72,10 +104,12 @@ def check_for_update(current_version: str, manifest_url: str) -> Update | None:
         import requests
 
         data = requests.get(manifest_url, timeout=_TIMEOUT).json()
-        remote = str(data.get("version", ""))
+        # GitHub trả `tag_name`/`html_url`; manifest tự host trả `version`/`url`.
+        remote = str(data.get("tag_name") or data.get("version") or "")
         if not is_newer(remote, current_version):
             return None
-        return Update(remote, str(data.get("url", "")))
+        url = str(data.get("html_url") or data.get("url") or "")
+        return Update(remote.lstrip("vV"), url)
     except Exception as exc:  # noqa: BLE001 - xem docstring
         log.info("Không kiểm tra được bản cập nhật: %s", exc)
         return None
@@ -89,5 +123,16 @@ if __name__ == "__main__":
     assert not is_newer("0.1.0", "0.2.0")
     assert not is_newer("", "0.2.0")
     assert not is_newer("latest", "0.2.0")
+    # Tiền phát hành: đây là thứ cách tách số cũ làm ngược.
+    assert is_newer("1.0.0", "1.0.0-rc1"), "ban chinh thuc phai moi hon rc"
+    assert not is_newer("1.0.0-rc1", "1.0.0"), "rc khong duoc coi la moi hon"
+    assert is_newer("1.0.0-rc2", "1.0.0-rc1")
+    assert not is_newer("1.0.0-rc1", "1.0.0-rc1")
+    assert is_newer("v1.0.0", "1.0.0-rc1"), "tag GitHub co tien to v"
+    assert is_newer("1.0.0rc1", "0.9.9"), "hau to khong dau gach"
+    assert is_newer("1.0.1", "1.0.0-rc1")
+    assert not is_newer("1.0.0-rc1", "1.0.0-rc2")
+    assert _key("1.0") == _key("1.0.0"), "'1.0' va '1.0.0' phai bang nhau"
+    assert _key("khong-phai-version") is None
     assert check_for_update("0.2.0", "") is None
     print("update_check OK")

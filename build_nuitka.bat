@@ -41,7 +41,20 @@ if not defined APP_VERSION (
     echo [ERROR] Khong doc duoc apps.__version__
     exit /b 1
 )
-echo [INFO] Version: %APP_VERSION%
+
+:: --file-version/--product-version cua Nuitka CHI nhan toi da 4 so, chu cai la
+:: loi ngay luc phan tich tham so. Ban tien phat hanh (1.0.0-rc1) vi the phai
+:: cat duoi hau to khi di vao metadata cua EXE. Chuoi day du van duoc dung cho
+:: duong dan cache onefile ben duoi, de rc1 va ban chinh thuc khong dung chung
+:: thu muc giai nen.
+"%PYTHON_EXE%" -c "import apps,re;print(re.match(r'[0-9]+(\.[0-9]+)*', apps.__version__).group(0))" > "%TEMP%\vitallens_fver.txt"
+set /p APP_FILEVER=<"%TEMP%\vitallens_fver.txt"
+del "%TEMP%\vitallens_fver.txt" >nul 2>nul
+if not defined APP_FILEVER (
+    echo [ERROR] Khong tach duoc phan so tu apps.__version__
+    exit /b 1
+)
+echo [INFO] Version: %APP_VERSION% (metadata EXE: %APP_FILEVER%)
 
 :: --- Step 1: Cong danh muc dich vu (giong build_exe.spec) ---
 echo.
@@ -104,10 +117,14 @@ if not exist ".env" echo [INFO] Khong co .env - build sach, nguoi dung tu nhap q
 ::       Nuitka khong tu lan het duoc. Tuong duong collect_all() trong spec.
 ::   KHONG dung --python-flag=no_asserts: paddle dung assert de kiem tra tham so,
 ::       app xu ly du lieu y te thi khong bo kiem tra de doi vai MB.
-::   --include-module=pydicom.pixels.decoders.* : pydicom nap plugin giai nen
-::       pixel bang importlib theo ten -> Nuitka khong tu lan toi. Bo hien tai:
-::       pillow (JPEG/JPEG2000), pylibjpeg-libjpeg (JPEG lossless/JPEG-LS),
-::       va rle thuan Python. pylibjpeg-libjpeg con tim codec qua entry point,
+::   --include-package=pydicom : pydicom nap plugin giai nen pixel bang importlib
+::       theo ten -> Nuitka khong tu lan toi. KHONG liet ke tung plugin: lan dau
+::       doc pixel, pydicom dang ky TAT CA plugin cua transfer syntax do (gdcm,
+::       pylibjpeg, pillow, rle) roi moi hoi cai nao dung duoc. Thieu du chi mot
+::       shim - vi du pydicom.pixels.decoders.gdcm du khong he cai python-gdcm -
+::       la ModuleNotFoundError ban ra truoc khi toi codec chay duoc, moi file
+::       DICOM nen deu hong. Nap ca goi cho chac; pydicom chi vai MB.
+::       pylibjpeg-libjpeg con tim codec qua entry point,
 ::       nen phai kem ca module `_libjpeg` + distribution metadata ben duoi.
 ::   --include-distribution-metadata=opencv-contrib-python/... : paddlex
 ::       (utils/deps.py) quyet dinh co `import cv2` hay khong bang
@@ -133,9 +150,9 @@ echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
   --company-name=OUCRU ^
   --product-name=VitalLens ^
   --file-description="VitalLens - medical data processing" ^
-  --file-version=%APP_VERSION% ^
-  --product-version=%APP_VERSION% ^
-  "--onefile-tempdir-spec={CACHE_DIR}/{COMPANY}/{PRODUCT}/{VERSION}" ^
+  --file-version=%APP_FILEVER% ^
+  --product-version=%APP_FILEVER% ^
+  "--onefile-tempdir-spec={CACHE_DIR}/{COMPANY}/{PRODUCT}/%APP_VERSION%" ^
   --include-data-dir=database=database ^
   --include-data-files=icon.ico=icon.ico ^
   "--include-data-dir=%MODELS%\PP-OCRv5_mobile_det=paddlex_models\PP-OCRv5_mobile_det" ^
@@ -145,6 +162,7 @@ echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
   --include-package=paddleocr ^
   --include-package=paddlex ^
   --include-package=google.protobuf ^
+  --include-package=pydicom ^
   --include-package=pylibjpeg ^
   --include-package=libjpeg ^
   --include-package-data=paddle ^
@@ -155,9 +173,6 @@ echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
   --include-package-data=pydicom ^
   --include-package-data=pylibjpeg ^
   --include-package-data=certifi ^
-  --include-module=pydicom.pixels.decoders.pillow ^
-  --include-module=pydicom.pixels.decoders.pylibjpeg ^
-  --include-module=pydicom.pixels.decoders.rle ^
   --include-module=_libjpeg ^
   --include-distribution-metadata=pylibjpeg-libjpeg ^
   --include-distribution-metadata=opencv-contrib-python ^

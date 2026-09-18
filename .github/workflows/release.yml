@@ -110,10 +110,10 @@ jobs:
         run: Move-Item dist_nuitka\VitalLens.exe "VitalLens_v$env:VERSION.exe"
 
       - name: Sinh manifest cập nhật
-        # File này chỉ có version + link, KHÔNG có token. Muốn app tự báo bản
-        # mới thì host nó ở một URL công khai rồi đặt UPDATE_MANIFEST_URL trong
-        # .env của người dùng — repo đang private nên link asset của Release
-        # đòi đăng nhập, không dùng trực tiếp được.
+        # Repo đã public nên app đọc thẳng API /releases/latest (mặc định trong
+        # apps/services/update_check.py) — không cần host gì cả. File này giữ
+        # lại cho ai muốn tự host mirror; `check_for_update` đọc được cả hai
+        # dạng. Chỉ có version + link, KHÔNG có token.
         shell: bash
         run: |
           printf '{"version": "%s", "url": "https://github.com/%s/releases/latest"}\n' \
@@ -124,4 +124,12 @@ jobs:
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$env:GITHUB_REF_NAME" --generate-notes "VitalLens_v$env:VERSION.exe" latest.json
+        # Version có hậu tố (1.0.0-rc1) => đánh dấu prerelease. /releases/latest
+        # của GitHub bỏ qua prerelease, nên bản rc KHÔNG tự rủ người đang dùng
+        # bản chính thức nâng cấp. Thiếu cờ này thì rc1 thành "latest" cho tất
+        # cả mọi người.
+        run: |
+          $ghArgs = @("$env:GITHUB_REF_NAME", '--generate-notes',
+                      "VitalLens_v$env:VERSION.exe", 'latest.json')
+          if ($env:VERSION -notmatch '^[0-9.]+$') { $ghArgs += '--prerelease' }
+          gh release create $ghArgs

@@ -14,6 +14,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from apps.runtime_paths import bundle_dir, exe_dir
+# Chỉ lấy một hằng số URL. `apps.services.__init__` không import gì và
+# `update_check` ở tầng module chỉ dùng logging/typing, nên không có vòng lặp
+# import và không kéo thêm gì nặng vào thứ tự khởi động ở main.py.
+from apps.services import update_check
 
 log = logging.getLogger(__name__)
 
@@ -266,7 +270,12 @@ class Settings:
             api_upload_url=_env_str("API_UPLOAD_URL", ""),
             api_bearer_token=_env_str("API_BEARER_TOKEN", ""),
             api_upload_owner=_env_str("API_UPLOAD_OWNER", ""),
-            update_manifest_url=_env_str("UPDATE_MANIFEST_URL", ""),
+            # Mặc định trỏ thẳng GitHub Releases của repo — repo đã public nên
+            # không cần token và không phải tự host manifest ở đâu cả. Đặt
+            # UPDATE_MANIFEST_URL= (rỗng) trong .env để tắt hẳn việc kiểm tra.
+            update_manifest_url=_env_str(
+                "UPDATE_MANIFEST_URL", update_check.UPDATE_DEFAULT_URL
+            ),
         )
 
 

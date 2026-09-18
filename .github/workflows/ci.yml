@@ -30,6 +30,14 @@ jobs:
           python -m apps.services.user_config
           python -m apps.services.export_store
 
+      # `python -m apps.processing.xray` cần pydicom + pylibjpeg thật nên không
+      # chạy chung với khối trên. Nó bắt đúng lỗi đóng gói đã làm hỏng mọi file
+      # DICOM nén: thiếu một shim decoder thì pydicom nổ ngay lúc đăng ký plugin.
+      - name: Self-check decoder DICOM
+        run: |
+          pip install pydicom==3.0.2 pylibjpeg==2.1.0 pylibjpeg-libjpeg==2.4.0 pillow
+          python -m apps.processing.xray
+
       - name: Không file secret nào được commit
         run: |
           tracked=$(git ls-files .env env config_debug.log)

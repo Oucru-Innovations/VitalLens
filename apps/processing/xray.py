@@ -351,10 +351,39 @@ def run_xray_processing(image_files, output_dir, callback):
 
         processed = total - len(errors)
         if errors:
-            callback(True, f"Done! {processed}/{total} images ({len(errors)} errors).")
+            # Trước đây chỉ báo SỐ LƯỢNG lỗi. DICOM nén (JPEG Lossless/JPEG-LS)
+            # hỏng vì bản đóng gói thiếu codec chỉ hiện "0/5 images (5 errors)",
+            # nguyên nhân thật nằm trong file log mà end-user không biết mở.
+            detail = "\n".join(errors[:5])
+            if len(errors) > 5:
+                detail += f"\n... và {len(errors) - 5} lỗi khác (xem log)"
+            callback(
+                processed > 0,
+                f"Done! {processed}/{total} images ({len(errors)} errors).\n\n{detail}",
+            )
         else:
             callback(True, f"Done! {total} images processed ({max_workers} threads).")
     except Exception as e:
         import traceback
         log.error("run_xray_processing failed:\n%s", traceback.format_exc())
         callback(False, f"Error: {e}\n\n{traceback.format_exc()}")
+
+
+if __name__ == "__main__":
+    # Chạy `python -m apps.processing.xray` để bắt lỗi đóng gói TRƯỚC khi build.
+    # `is_available` ép pydicom đăng ký toàn bộ plugin của transfer syntax đó —
+    # đúng thứ nổ ra ModuleNotFoundError khi bundle thiếu một shim decoder.
+    import pydicom.pixels.decoders as _decoders
+
+    _names = [n for n in dir(_decoders) if n.endswith("Decoder")]
+    assert _names, "pydicom doi API: khong tim thay decoder nao"
+    for _name in _names:
+        _dec = getattr(_decoders, _name)
+        _dec.is_available  # noqa: B018 - nạp plugin, ném lỗi nếu thiếu module
+        print(f"{_name:<40} plugins={_dec.available_plugins}")
+
+    # Ảnh X-Quang từ máy VIEWORKS/VXVUE là JPEG Lossless; không có plugin nào
+    # chạy được cho transfer syntax này nghĩa là bundle vô dụng với DICOM nén.
+    for _name in ("JPEGLosslessSV1Decoder", "JPEGLSLosslessDecoder", "RLELosslessDecoder"):
+        assert getattr(_decoders, _name).available_plugins, f"{_name}: khong co plugin kha dung"
+    print("OK - decoder DICOM day du")

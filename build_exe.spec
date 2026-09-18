@@ -12,6 +12,7 @@ Or use the wrapper script:
 from PyInstaller.utils.hooks import (
     collect_all,
     collect_dynamic_libs,
+    collect_submodules,
     copy_metadata,
 )
 
@@ -153,13 +154,13 @@ _all_datas.append((str(_catalog_file), 'database'))
 # Hidden imports (lazy / dynamic imports not auto-detected)
 # =====================================================================
 _all_hiddenimports += [
-    # pydicom nạp plugin giải nén pixel động. Bộ deps hiện tại dùng Pillow cho
-    # JPEG baseline/extended + JPEG2000, pylibjpeg-libjpeg cho JPEG lossless /
-    # JPEG-LS, và decoder RLE thuần Python có sẵn trong pydicom.
-    # Không cần encoder: xray.py luôn ghi ra Explicit VR Little Endian.
-    'pydicom.pixels.decoders.pillow',
-    'pydicom.pixels.decoders.pylibjpeg',
-    'pydicom.pixels.decoders.rle',
+    # pydicom nạp plugin giải nén pixel động. KHÔNG liệt kê từng plugin: lần đầu
+    # đọc pixel, pydicom đăng ký TẤT CẢ plugin của transfer syntax đó (gdcm,
+    # pylibjpeg, pillow, rle) rồi mới hỏi cái nào dùng được. Thiếu dù chỉ một
+    # shim — ví dụ pydicom.pixels.decoders.gdcm dù không hề cài python-gdcm —
+    # là ModuleNotFoundError bắn ra trước khi tới codec chạy được, mọi file
+    # DICOM nén đều hỏng. Gom cả gói cho chắc; pydicom chỉ vài MB.
+    *collect_submodules('pydicom'),
     # Extension native của distribution pylibjpeg-libjpeg nằm ở top-level,
     # ngoài package `libjpeg`, nên collect_all('libjpeg') không tự liệt kê nó.
     '_libjpeg',
