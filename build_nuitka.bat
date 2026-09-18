@@ -115,6 +115,11 @@ if not exist ".env" echo [INFO] Khong co .env - build sach, nguoi dung tu nhap q
 ::       ma khong giup gi cho phan native cua paddle (da duoc bien dich san).
 ::   --include-package=paddle/paddleocr/paddlex : ba goi nay import dong rat nhieu,
 ::       Nuitka khong tu lan het duoc. Tuong duong collect_all() trong spec.
+::   KHONG them --include-package-data cho certifi/pypdfium2/pypdfium2_raw:
+::       Nuitka da co san cau hinh cho ba goi nay, khai bao them chi de ra
+::       "Duplicate data file ... ignored" -- canh bao vo hai nhung lam chim
+::       nhung canh bao that. Bo di KHONG lam mat cacert.pem hay version.json,
+::       chinh dong canh bao noi ro file da duoc cung cap tu nguon kia.
 ::   KHONG dung --python-flag=no_asserts: paddle dung assert de kiem tra tham so,
 ::       app xu ly du lieu y te thi khong bo kiem tra de doi vai MB.
 ::   --include-package=pydicom : pydicom nap plugin giai nen pixel bang importlib
@@ -168,11 +173,8 @@ echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
   --include-package-data=paddle ^
   --include-package-data=paddleocr ^
   --include-package-data=paddlex ^
-  --include-package-data=pypdfium2 ^
-  --include-package-data=pypdfium2_raw ^
   --include-package-data=pydicom ^
   --include-package-data=pylibjpeg ^
-  --include-package-data=certifi ^
   --include-module=_libjpeg ^
   --include-distribution-metadata=pylibjpeg-libjpeg ^
   --include-distribution-metadata=opencv-contrib-python ^
