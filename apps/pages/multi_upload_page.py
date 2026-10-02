@@ -50,7 +50,7 @@ from apps.widgets import (
 log = logging.getLogger(__name__)
 
 # Khớp các giá trị FileNameParser.get_datatype() trả về (đã sanitize/lower).
-SFTP_TYPES = {"xray", "ecg", "ultrasound", "mri", "ctscan", "others"}
+SFTP_TYPES = {"xray", "ecg", "ultrasound", "mri", "ctscan", "others", "portalite"}
 HTTP_TYPES = {"image", "metadata"}
 
 TABLE_COLUMNS = ("file", "study", "patient", "data_type", "date", "route")
