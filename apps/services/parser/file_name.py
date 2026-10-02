@@ -7,7 +7,7 @@ tz = timezone(timedelta(hours=7))
 STUDIES = ['24EIb', '24EIc','39EIa','01NVb','01NVc']+\
 	['05EI_Covid19', '05EI_MPox', '05EI_Flu'] +\
 	['24EIB', '39EIA','54EI', '56EI', '47EI', '46EI', '05EI', '28EI', '00EI','24EIC', '08NV','09NV','17EI','39EI','01NVB','55EI', '01NVC','46EI','60EI','66DX', '60EI', '62EI'] +\
-	['13NV', '61EI', '66EI']
+	['13NV', '61EI', '66EI', '55TB', '66EI', '65EI', '00TB']
 	
 
 PATTERN = [
@@ -79,6 +79,8 @@ class FileNameParser:
 		path = self.file.lower()
 		if re.search("(smartcare|ppg|pleth)", path):
 			return "PPG"
+		if re.search(r'Portalite', self.file) or re.search(r'NIRS', path):
+			return "Portalite"
 		if re.search("(SmartCareCsv)", self.file):
 			return "PPG"
 		if re.search("(EcgCsv)", self.file):
