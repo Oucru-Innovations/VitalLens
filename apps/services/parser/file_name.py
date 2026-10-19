@@ -352,3 +352,36 @@ class FileNameParser:
 		return file_metadata['filename']
 
 
+
+
+# 13NV-AAA-BBBB[-C|-V]_DDMMYYYY[HHMMSS]... (hậu tố -C/-V và giờ là tùy chọn)
+_13NV_NAME = re.compile(
+	r"(13NV-[A-Z0-9]{3}-[A-Z0-9]{4}(?:-[CV])?)_(\d{8})(\d{6})?(?!\d)", re.IGNORECASE
+)
+
+
+def parse_13nv_name(filename):
+	"""Tách (patient_code, "dd-mm-yyyy" | None) từ tên file 13NV; None nếu không khớp.
+
+	Giờ HHMMSS chỉ dùng để kiểm tra hợp lệ — form chỉ lưu ngày.
+	"""
+	m = _13NV_NAME.match(os.path.basename(filename))
+	if not m:
+		return None
+	patient, day, time = m.group(1).upper(), m.group(2), m.group(3) or ""
+	try:
+		date = datetime.strptime(day + time, "%d%m%Y" + ("%H%M%S" if time else "")).strftime("%d-%m-%Y")
+	except ValueError:
+		date = None
+	return patient, date
+
+
+if __name__ == "__main__":
+	assert parse_13nv_name(r"C:\x\13NV-001-0023-C_19102026143005.pdf") == ("13NV-001-0023-C", "19-10-2026")
+	assert parse_13nv_name("13nv-001-0023-v_19102026.pdf") == ("13NV-001-0023-V", "19-10-2026")
+	assert parse_13nv_name("13NV-001-0023_01022026.pdf") == ("13NV-001-0023", "01-02-2026")
+	assert parse_13nv_name("13NV-001-0023_31022026.pdf") == ("13NV-001-0023", None)  # ngày sai
+	assert parse_13nv_name("13NV-001-0023_190220261430.pdf") is None  # giờ thiếu chữ số
+	assert parse_13nv_name("13NV-001-0023-X_19102026.pdf") is None
+	assert parse_13nv_name("report.pdf") is None
+	print("parse_13nv_name OK")

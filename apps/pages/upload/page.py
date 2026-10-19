@@ -53,6 +53,7 @@ from apps.config import (
     FG_TITLE,
 )
 from apps.services import export_store
+from apps.services.parser.file_name import parse_13nv_name
 from apps.services.pdf_redact import save_redacted_pdf, temp_output_path
 from apps.services.upload_api import make_session, upload_pair
 from apps.widgets import (
@@ -1199,7 +1200,21 @@ class UploadPDFPage(tk.Frame):
             )
 
     def _restore_form_data(self, filepath: str) -> None:
-        data = self.form_data.get(filepath, {})
+        data = dict(self.form_data.get(filepath, {}))
+        # Mở file gốc lần đầu (chưa có draft) → điền sẵn từ tên file 13NV, chỉ
+        # vào ô trống. Không áp cho export đã lưu để không đè dữ liệu đã nhập.
+        parsed = (
+            parse_13nv_name(filepath)
+            if self.current_export_idx is None
+            and filepath not in self.draft_form_data
+            else None
+        )
+        if parsed:
+            patient, file_date = parsed
+            data.setdefault("patient_code", patient)
+            if file_date:
+                for key in ("sampling_date", "receipt_date", "result_date"):
+                    data.setdefault(key, file_date)
         for key, var in self.form_vars.items():
             if key == "date":
                 var.set(datetime.now().strftime("%d-%m-%Y"))
