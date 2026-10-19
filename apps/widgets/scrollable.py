@@ -61,6 +61,11 @@ class ScrollableFrame(tk.Frame):
         self.canvas.unbind_all("<Button-5>")
 
     def _on_mousewheel(self, event):
+        # `bind_all` sống lâu hơn canvas: frame bị hủy khi chuột còn bên trong
+        # (popup đóng) thì không có <Leave> để gỡ — đừng cuộn canvas đã chết.
+        if not self.canvas.winfo_exists():
+            self._unbind_mousewheel(event)
+            return
         if event.num == 4:
             self.canvas.yview_scroll(-1, "units")
         elif event.num == 5:

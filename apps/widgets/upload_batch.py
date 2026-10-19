@@ -8,17 +8,25 @@ from __future__ import annotations
 import logging
 import threading
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import ttk
 from typing import Callable, Optional
 
 from apps.services.upload_api import UploadJob, Uploader
 
+from .buttons import StyledButton
+from .dialogs import show_error
+
 log = logging.getLogger(__name__)
+
+
+def _set_btn(btn: Optional[StyledButton], state: str) -> None:
+    if btn is not None:
+        btn.set_state(state)
 
 
 def run_upload_batch(
     parent: tk.Widget,
-    upload_btn,
+    upload_btn: Optional[StyledButton],
     status,
     get_uploader: Callable[[Callable[[Uploader], None], Callable[[str], None]], None],
     jobs: list[UploadJob],
@@ -29,8 +37,8 @@ def run_upload_batch(
     """Chuẩn bị Uploader cho từng file. Luôn chạy hết mọi job kể cả khi có job
     bị lỗi (không dừng ở lỗi đầu tiên) - lỗi được gom lại và báo cáo chung
     khi xong, để một job lỗi không chặn các job còn lại trong lô.
-    Tự bật/tắt `upload_btn`, cập nhật `status`, và hiện một thanh tiến trình
-    tạm thời ngay phía trên `status`.
+    Tự bật/tắt `upload_btn` (``None`` = trang không có nút riêng), cập nhật
+    `status`, và hiện một thanh tiến trình tạm thời ngay phía trên `status`.
 
     `get_uploader(on_ready, on_error)`: factory bất đồng bộ trả Uploader qua
     `on_ready` (vd: SFTP cần đăng nhập trước; HTTP gọi `on_ready` ngay).
@@ -43,7 +51,7 @@ def run_upload_batch(
         return
 
     total = sum(len(job.files) for job in jobs)
-    upload_btn.set_state("disabled")
+    _set_btn(upload_btn, "disabled")
     status.set("Đang chuẩn bị upload...", "working")
 
     progress_bar = ttk.Progressbar(
@@ -58,7 +66,7 @@ def run_upload_batch(
 
     def finish(done_count: int, errors: list[tuple[UploadJob, str]]) -> None:
         progress_bar.destroy()
-        upload_btn.set_state("normal")
+        _set_btn(upload_btn, "normal")
         if errors:
             log.error(
                 "Lô upload kết thúc: %d file OK, %d/%d job lỗi.",
@@ -68,7 +76,7 @@ def run_upload_batch(
                 f"Upload: {done_count} file OK, {len(errors)} job lỗi.", "error"
             )
             detail = "\n".join(f"{job.label}: {msg}" for job, msg in errors)
-            messagebox.showerror("Lỗi upload", detail)
+            show_error(parent, "Lỗi upload", detail)
         else:
             status.set(
                 f"Upload thành công! {done_count} file ({len(jobs)} mục).",
@@ -113,9 +121,9 @@ def run_upload_batch(
     def on_error(err_msg: str) -> None:
         log.error("Không tạo được uploader, hủy lô %d job: %s", len(jobs), err_msg)
         progress_bar.destroy()
-        upload_btn.set_state("normal")
+        _set_btn(upload_btn, "normal")
         status.set(f"Lỗi: {err_msg}", "error")
-        messagebox.showerror("Lỗi", err_msg)
+        show_error(parent, "Lỗi", err_msg)
         if on_batch_done is not None:
             on_batch_done(False)
 

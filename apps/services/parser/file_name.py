@@ -11,8 +11,8 @@ STUDIES = ['24EIb', '24EIc','39EIa','01NVb','01NVc']+\
 	
 
 PATTERN = [
-	"\d{4}-\d{2}-\d{2}_\d{2}.\d{2}.\d{2}",  # iP
-	"(\d{4}\d{2}\d{2}T\d{2}\d{2}\d{2}\.\d+\+\d{2}\d{2})",  # UTC
+	r"\d{4}-\d{2}-\d{2}_\d{2}.\d{2}.\d{2}",  # iP
+	r"(\d{4}\d{2}\d{2}T\d{2}\d{2}\d{2}\.\d+\+\d{2}\d{2})",  # UTC
 ]
 FORMAT = ["%Y-%m-%d_%H.%M.%S", "%Y%m%dT%H%M%S.%f%z"]  # iP  # UTC
 
@@ -92,7 +92,7 @@ class FileNameParser:
 		if re.search("Annotation|Log_", self.file):
 			return "Note"
 		if re.search(
-				"(shimmer|efs|ecg|edf|missing|chainfo|chaninfo|events|devperf|annot|\.rr)", path
+				r"(shimmer|efs|ecg|edf|missing|chainfo|chaninfo|events|devperf|annot|\.rr)", path
 		):
 			return "ECG"
 		if re.search("(ultrasound|/ult/|uls)", path):
@@ -132,7 +132,7 @@ class FileNameParser:
 	def get_start_time(self, datatype):
 		file = self.file
 		if file.find('Annotation')!=-1 or file.find('Log_')!=-1:
-			matches = re.findall("\d{4}-\d{2}-\d{2}", file)
+			matches = re.findall(r"\d{4}-\d{2}-\d{2}", file)
 			if len(matches) > 0:
 				return datetime.strptime(
 					matches[0], "%Y-%m-%d"
@@ -141,9 +141,9 @@ class FileNameParser:
 		if datatype in ["ECG","sECG"]:
 			ts_format = {
 				# shimmer consensys format
-				'\d{4}-\d{2}-\d{2}_\d{2}.\d{2}.\d{2}': "%Y-%m-%d_%H.%M.%S",
+				r'\d{4}-\d{2}-\d{2}_\d{2}.\d{2}.\d{2}': "%Y-%m-%d_%H.%M.%S",
 				# Hospital ECG
-				'[01]\d[0-3]\d20\d{2}_[0-2]\d[0-5]\d[0-5]\d': "%m%d%Y_%H%M%S",
+				r'[01]\d[0-3]\d20\d{2}_[0-2]\d[0-5]\d[0-5]\d': "%m%d%Y_%H%M%S",
 			}
 			for p, fmt in ts_format.items():
 				matches = re.findall(p, file)
@@ -164,7 +164,7 @@ class FileNameParser:
 						matches[0], FORMAT[idx]
 					).replace(tzinfo=tz)
 		if file.find('28EI')!=-1:
-			matches = re.findall("[0-3]\d[0-1]\d20[1-2]\d", file)
+			matches = re.findall(r"[0-3]\d[0-1]\d20[1-2]\d", file)
 			if len(matches) > 0:
 				try:
 					return datetime.strptime(
@@ -175,7 +175,7 @@ class FileNameParser:
 			return None
 		if file.find('39EIa')!=-1 and file.find('/ECG/')!=-1:
 			# sECG
-			matches = re.findall("[0-1]\d[0-3]\d20[1-2]\d", file)
+			matches = re.findall(r"[0-1]\d[0-3]\d20[1-2]\d", file)
 			if len(matches) > 0:
 				try:
 					return datetime.strptime(
@@ -184,7 +184,7 @@ class FileNameParser:
 				except Exception as e:
 					print('no date',file, 'due to', e)
 		if datatype == "X-ray":
-			matches = re.findall("([0-3]\d[01]\d20\d{2})", file)
+			matches = re.findall(r"([0-3]\d[01]\d20\d{2})", file)
 			if len(matches) > 0:
 				try:
 					return datetime.strptime(
@@ -195,9 +195,9 @@ class FileNameParser:
 			return None
 		# Monitor and also wearable convention
 		patterns = [
-			("[0-3]\d.[0-1]\d.20[1-2]\d.[0-2]\d.[0-5]\d.[0-5]\d", "%d.%m.%Y.%H.%M.%S"),  #monitor
-			("\d{14}",  "%Y%m%d%H%M%S"),  #YYYYMMDDHHMMSS
-			("\d{12}",  "%Y%m%d%H%M")
+			(r"[0-3]\d.[0-1]\d.20[1-2]\d.[0-2]\d.[0-5]\d.[0-5]\d", "%d.%m.%Y.%H.%M.%S"),  #monitor
+			(r"\d{14}",  "%Y%m%d%H%M%S"),  #YYYYMMDDHHMMSS
+			(r"\d{12}",  "%Y%m%d%H%M")
 		]
 		for p, fmt in patterns:
 			matches = re.findall(p, file)
@@ -241,7 +241,7 @@ class FileNameParser:
 	def get_end_time(self, datatype):
 		file = self.file
 		if datatype == "ECG":
-			matches = re.findall("\d{4}-\d{2}-\d{2}_\d{2}.\d{2}.\d{2}", file)
+			matches = re.findall(r"\d{4}-\d{2}-\d{2}_\d{2}.\d{2}.\d{2}", file)
 			if len(matches) > 1:
 				return datetime.strptime(
 					matches[1], "%Y-%m-%d_%H.%M.%S"
@@ -249,7 +249,7 @@ class FileNameParser:
 		if datatype == "sECG":
 			return None
 		# Monitor and also wearable convention
-		matches = re.findall("[0-3]\d.[0-1]\d.20[1-2]\d.[0-2]\d.[0-5]\d.[0-5]\d", file)
+		matches = re.findall(r"[0-3]\d.[0-1]\d.20[1-2]\d.[0-2]\d.[0-5]\d.[0-5]\d", file)
 		if len(matches) > 1:
 			try:
 				return datetime.strptime(
@@ -263,7 +263,7 @@ class FileNameParser:
 	def get_patient(self):
 		file = self.file
 		file = file.replace("01nvc", "01NVc")
-		patterns = ["\d+\w+[_-]\d+[_-]\d+[_-][a-zA-Z]","\d+\w+[_-]\d+[_-]\d+", "\d+\w+[_-]\d+[_-]\d+-\d{1,2}"]
+		patterns = [r"\d+\w+[_-]\d+[_-]\d+[_-][a-zA-Z]",r"\d+\w+[_-]\d+[_-]\d+", r"\d+\w+[_-]\d+[_-]\d+-\d{1,2}"]
 		for p in patterns:
 			matches = re.findall(p, file)
 			if len(matches) > 0:
@@ -272,7 +272,7 @@ class FileNameParser:
 
 	def get_device(self):
 		file = self.file
-		matches = re.findall("Shimmer_(\w+)_Calibrated_SD", file)
+		matches = re.findall(r"Shimmer_(\w+)_Calibrated_SD", file)
 		if len(matches) > 0:
 			return 'Shimmer'
 		if file.endswith('.dcm') or file.split('/')[-1].find('.')==-1:

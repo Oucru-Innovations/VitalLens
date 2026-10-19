@@ -8,13 +8,16 @@ Thiết kế ưu tiên ĐỘ TIN CẬY trên Windows:
   anchor thì căn giữa cửa sổ cha. Không nhảy ra góc màn hình.
 - Modal (``grab_set`` sau ``wait_visibility``), đóng bằng ``Esc`` / nút ✕ cửa
   sổ. Có nút "Hôm nay" và "Xóa" cho thao tác nhanh.
+- ``Ctrl+V`` dán ngày từ clipboard (chấp nhận nhiều định dạng, xem
+  `parse_date_text`), ``Ctrl+C`` copy ngày đang chọn.
 """
 
 from __future__ import annotations
 
 import calendar
+import re
 import tkinter as tk
-from datetime import datetime
+from datetime import date, datetime
 from typing import Callable, Optional
 
 from apps.config import (
@@ -22,7 +25,6 @@ from apps.config import (
     ACCENT_RED,
     BG_CARD,
     BG_INPUT,
-    BORDER_COLOR,
     BTN_HOVER_BLUE,
     FG_DIM,
     FG_TEXT,
@@ -30,6 +32,47 @@ from apps.config import (
 )
 
 _WEEKDAYS = ("T2", "T3", "T4", "T5", "T6", "T7", "CN")
+
+# Ngày có dấu phân cách: ``d-m-yyyy``/``d/m/yyyy``/``d.m.yyyy`` hoặc
+# ``yyyy-m-d``. Năm bắt buộc 4 chữ số — ``01/02/03`` là đoán mò, không nhận.
+_SEPARATED_DATE = re.compile(r"(?<!\d)(\d{1,4})[-/.](\d{1,2})[-/.](\d{1,4})(?!\d)")
+
+
+def parse_date_text(text: str) -> Optional[str]:
+    """Chuẩn hoá chuỗi ngày dán vào (copy từ Excel, email, PDF...) về
+    ``dd-mm-yyyy``. ``None`` nếu không phải ngày hợp lệ.
+
+    Nhận ``18/08/2026``, ``18-8-2026``, ``18.08.2026``, ``2026-08-18``,
+    ``18082026`` và các chuỗi có giờ đi kèm (``18/08/2026 10:30``).
+    """
+
+    text = (text or "").strip()
+    match = _SEPARATED_DATE.search(text)
+    if match:
+        a, b, c = match.groups()
+        if len(a) == 4:
+            y, m, d = a, b, c
+        elif len(c) == 4:
+            d, m, y = a, b, c
+        else:
+            return None
+    elif re.fullmatch(r"\d{8}", text):
+        d, m, y = text[:2], text[2:4], text[4:]  # ddmmyyyy — kiểu của file_name
+    else:
+        return None
+    try:
+        return date(int(y), int(m), int(d)).strftime("%d-%m-%Y")
+    except ValueError:
+        return None
+
+
+def clipboard_date(widget: tk.Misc) -> Optional[str]:
+    """Ngày trong clipboard dạng ``dd-mm-yyyy``, ``None`` nếu không có."""
+
+    try:
+        return parse_date_text(widget.clipboard_get())
+    except tk.TclError:  # clipboard rỗng / không phải text
+        return None
 
 
 class DatePicker(tk.Toplevel):
@@ -92,6 +135,8 @@ class DatePicker(tk.Toplevel):
         self.focus_set()
 
         self.bind("<Escape>", lambda e: self._close())
+        self.bind("<<Paste>>", lambda e: self._paste())
+        self.bind("<<Copy>>", lambda e: self._copy())
         self.protocol("WM_DELETE_WINDOW", self._close)
 
     # ------------------------------------------------------------------
@@ -134,6 +179,11 @@ class DatePicker(tk.Toplevel):
         )
         if self._allow_clear:
             self._text_btn(footer, "Xóa", ACCENT_RED, self._clear).pack(side="right")
+
+        tk.Label(
+            self, text="Ctrl+V dán ngày · Ctrl+C copy", font=("Helvetica", 8),
+            bg=BG_CARD, fg=FG_DIM,
+        ).pack(pady=(0, 6))
 
     def _nav_btn(self, parent: tk.Widget, text: str, cmd) -> tk.Label:
         btn = tk.Label(
@@ -272,6 +322,20 @@ class DatePicker(tk.Toplevel):
             self.on_select("")
         self._close()
 
+    def _paste(self) -> None:
+        value = clipboard_date(self)
+        if value is None:
+            self.bell()
+            return
+        if self.on_select:
+            self.on_select(value)
+        self._close()
+
+    def _copy(self) -> None:
+        if self.current_date is not None:
+            self.clipboard_clear()
+            self.clipboard_append(self.current_date.strftime("%d-%m-%Y"))
+
     def _close(self) -> None:
         if self._closed:
             return
@@ -283,4 +347,20 @@ class DatePicker(tk.Toplevel):
         self.destroy()
 
 
-__all__ = ["DatePicker"]
+__all__ = ["DatePicker", "clipboard_date", "parse_date_text"]
+
+
+if __name__ == "__main__":
+    assert parse_date_text("18/08/2026") == "18-08-2026"
+    assert parse_date_text(" 18-8-2026 ") == "18-08-2026"
+    assert parse_date_text("18.08.2026") == "18-08-2026"
+    assert parse_date_text("2026-08-18") == "18-08-2026", "dang ISO"
+    assert parse_date_text("18/08/2026 10:30:00") == "18-08-2026", "co gio di kem"
+    assert parse_date_text("Ngay KQ: 01/02/2026.") == "01-02-2026", "lan trong cau"
+    assert parse_date_text("18082026") == "18-08-2026", "ddmmyyyy"
+    assert parse_date_text("31/02/2026") is None, "ngay khong ton tai"
+    assert parse_date_text("01/02/03") is None, "nam 2 chu so la doan mo"
+    assert parse_date_text("123/08/2026") is None
+    assert parse_date_text("") is None
+    assert parse_date_text("abc") is None
+    print("date_picker OK")

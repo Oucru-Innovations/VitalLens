@@ -3,7 +3,7 @@
 import os
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 
 from apps.config import (
     APP_DIR, BG_MAIN, BG_CARD, BG_INPUT, FG_TEXT, FG_DIM,
@@ -13,7 +13,7 @@ from apps.config import (
 )
 from apps.widgets import (
     StyledButton, StatusBar, make_header, make_section,
-    ScrollableFrame, make_scrollable_listbox, show_info, show_warning, show_error,
+    ScrollableFrame, make_scrollable_listbox, show_info, show_warning, show_error, ask_yes_no,
     get_sftp_uploader, run_upload_batch,
 )
 from apps.services.upload_api import UploadJob
@@ -221,7 +221,8 @@ class XMLToExcelPage(tk.Frame):
         if not SFTP_BUFFER_PATH:
             show_warning(self, "Thiếu cấu hình", "Chưa cấu hình SFTP_BUFFER_PATH trong .env.")
             return
-        if not messagebox.askyesno(
+        if not ask_yes_no(
+            self,
             "Upload", "Upload file Excel đã xử lý lên không gian lưu trữ?"
         ):
             return

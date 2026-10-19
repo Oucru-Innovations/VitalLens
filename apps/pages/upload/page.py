@@ -29,7 +29,7 @@ import threading
 import tkinter as tk
 import uuid
 from datetime import datetime
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, ttk
 
 from apps.config import (
     ACCENT_BLUE,
@@ -61,6 +61,9 @@ from apps.widgets import (
     make_scrollable_listbox,
     StatusBar,
     StyledButton,
+    ask_owner,
+    ask_yes_no,
+    clipboard_date,
     make_header,
     show_error,
     show_info,
@@ -244,10 +247,23 @@ class UploadPDFPage(tk.Frame):
         pick_btn.bind("<Enter>", lambda e: pick_btn.config(bg=BTN_HOVER_ORANGE))
         pick_btn.bind("<Leave>", lambda e: pick_btn.config(bg=ACCENT_ORANGE))
 
+        file_count_row = tk.Frame(top, bg=BG_CARD)
+        file_count_row.pack(fill="x", padx=10)
         self.file_count_lbl = tk.Label(
-            top, text="Chưa chọn file", font=("Helvetica", 10), bg=BG_CARD, fg=FG_DIM
+            file_count_row, text="Chưa chọn file", font=("Helvetica", 10),
+            bg=BG_CARD, fg=FG_DIM,
         )
-        self.file_count_lbl.pack(padx=10, anchor="w")
+        self.file_count_lbl.pack(side="left")
+        # Chỉ hiện khi danh sách có file (xem _refresh_file_list).
+        self.clear_files_btn = tk.Label(
+            file_count_row, text="✕ Xóa danh sách", font=("Helvetica", 10, "bold"),
+            bg=BG_CARD, fg=FG_DIM, cursor="hand2",
+        )
+        self.clear_files_btn.bind("<Button-1>", lambda e: self._clear_file_list())
+        self.clear_files_btn.bind(
+            "<Enter>", lambda e: self.clear_files_btn.config(fg=ACCENT_RED))
+        self.clear_files_btn.bind(
+            "<Leave>", lambda e: self.clear_files_btn.config(fg=FG_DIM))
 
         list_frame1, self.file_listbox = make_scrollable_listbox(
             top,
@@ -535,7 +551,6 @@ class UploadPDFPage(tk.Frame):
 
         self.form_vars: dict[str, tk.StringVar] = {}
         self.input_widgets: list = []
-        self.date_labels: dict[str, tk.Label] = {}
         self._date_refreshers: list = []
 
         def _input_border(parent_frame):
@@ -596,8 +611,10 @@ class UploadPDFPage(tk.Frame):
             wrapper = _input_border(row)
             wrapper.pack(side="left", fill="x", expand=True)
 
-            # "Ô" read-only: KHÔNG cho gõ freetext, chỉ chọn qua lịch. Gồm nhãn
-            # giá trị (hoặc placeholder) + nút xóa + icon lịch.
+            # "Ô" read-only: KHÔNG cho gõ freetext (dễ sai định dạng), chỉ chọn
+            # qua lịch hoặc dán — chuột phải / Ctrl+V trong lịch, giá trị dán
+            # được chuẩn hoá qua `clipboard_date`. Gồm nhãn giá trị (hoặc
+            # placeholder) + nút xóa + icon lịch.
             field = tk.Frame(wrapper, bg=BG_INPUT)
             field.pack(fill="x")
 
@@ -617,7 +634,6 @@ class UploadPDFPage(tk.Frame):
                 bg=BG_INPUT, fg=FG_TEXT, cursor="hand2",
             )
             val_lbl.pack(side="left", fill="x", expand=True, padx=(8, 2), pady=5)
-            self.date_labels[key] = val_lbl
 
             def refresh(*_):
                 readonly = self.view_mode == "uploaded"
@@ -650,6 +666,34 @@ class UploadPDFPage(tk.Frame):
             clear_btn.bind("<Button-1>", lambda e: (var.set(""), "break")[1])
             clear_btn.bind("<Enter>", lambda e: clear_btn.config(fg=ACCENT_RED))
             clear_btn.bind("<Leave>", lambda e: clear_btn.config(fg=FG_DIM))
+
+            def copy_date():
+                self.clipboard_clear()
+                self.clipboard_append(var.get().strip())
+
+            def paste_date():
+                value = clipboard_date(self)
+                if value is None:
+                    self.status.set("Clipboard không chứa ngày hợp lệ (dd-mm-yyyy)", "error")
+                    return
+                var.set(value)
+
+            menu = tk.Menu(self, tearoff=0)
+            menu.add_command(label="Copy", command=copy_date)
+            menu.add_command(label="Dán ngày", command=paste_date)
+
+            def show_menu(event):
+                editable = self.view_mode != "uploaded" and not self._busy
+                menu.entryconfigure(
+                    0, state="normal" if var.get().strip() else "disabled")
+                menu.entryconfigure(1, state="normal" if editable else "disabled")
+                try:
+                    menu.tk_popup(event.x_root, event.y_root)
+                finally:
+                    menu.grab_release()
+
+            for w in (field, val_lbl, cal_icon):
+                w.bind("<Button-3>", show_menu)
 
             refresh()
             return row
@@ -790,6 +834,58 @@ class UploadPDFPage(tk.Frame):
             text=f"✓ {len(self.pdf_files)} file" if self.pdf_files else "Chưa chọn file",
             fg=ACCENT_GREEN if self.pdf_files else FG_DIM,
         )
+        if self.pdf_files:
+            self.clear_files_btn.pack(side="right")
+        else:
+            self.clear_files_btn.pack_forget()
+
+    def _clear_file_list(self) -> None:
+        """Bỏ hết file khỏi danh sách PDF gốc (không xoá gì trên ổ đĩa).
+
+        Cặp đã lưu nằm ở Pending/Uploaded nên không mất gì; chỉ hỏi lại khi còn
+        file CHƯA lưu — phần tô đen/nhập dở của chúng vẫn giữ trong bộ nhớ nếu
+        chọn lại đúng file đó trong phiên này.
+        """
+
+        if self._busy or not self.pdf_files:
+            return
+        unsaved = [f for f in self.pdf_files if f not in self.saved_files]
+        if unsaved and not ask_yes_no(
+            self,
+            "Xóa danh sách PDF gốc",
+            f"Còn {len(unsaved)} file chưa lưu:\n\n"
+            + "\n".join(f"  • {os.path.basename(f)}" for f in unsaved)
+            + "\n\nVẫn xóa khỏi danh sách? (file gốc trên ổ đĩa không bị xóa)",
+        ):
+            return
+
+        cleared = len(self.pdf_files)
+        # Đang xem chính file gốc (không phải một cặp Pending/Uploaded) → đóng
+        # viewer, kẻo form vẫn trỏ vào file không còn trong danh sách.
+        if self.current_export_idx is None and self.current_file in self.pdf_files:
+            self._save_current_form_data()
+            self._close_viewer()
+        self.pdf_files.clear()
+        self._refresh_file_list()
+        self.status.set(f"Đã xóa {cleared} file khỏi danh sách", "info")
+
+    def _close_viewer(self) -> None:
+        if self.current_pdf:
+            try:
+                self.current_pdf.close()
+            except Exception:  # noqa: BLE001 - pypdfium2 ném lỗi chung
+                pass
+        self.current_pdf = None
+        self.current_file = None
+        self.page_count = 0
+        self.current_page = 0
+        self._photo = None
+        self.canvas.delete("all")
+        self.page_label.config(text="")
+        for key, var in self.form_vars.items():
+            if key != "date":
+                var.set("")
+        self.update_type_visibility()
 
     def _on_file_selected(self, event) -> None:
         if self._busy:
@@ -863,7 +959,8 @@ class UploadPDFPage(tk.Frame):
 
         self.focus_set()
         mode_text = "Pending" if self.view_mode == "pending" else "Uploaded"
-        if not messagebox.askyesno(
+        if not ask_yes_no(
+            self,
             "Xác nhận xóa",
             f"Bạn có chắc muốn xóa bản lưu này khỏi mục {mode_text}?\n"
             "(Sẽ xóa luôn file gốc được xuất ra trên ổ cứng)",
@@ -1329,7 +1426,8 @@ class UploadPDFPage(tk.Frame):
         if _norm_path(path) == _norm_path(self.output_var.get().strip() or "."):
             self.output_var.set(path)
             return
-        if (self.saved_exports or self.uploaded_exports) and not messagebox.askyesno(
+        if (self.saved_exports or self.uploaded_exports) and not ask_yes_no(
+            self,
             "Đổi thư mục làm việc",
             "Đổi thư mục sẽ nạp lại danh sách Pending/Uploaded theo thư mục mới.\n"
             "Các cặp trong thư mục cũ vẫn còn trên ổ đĩa. Tiếp tục?",
@@ -1597,98 +1695,6 @@ class UploadPDFPage(tk.Frame):
     # UPLOAD
     # ================================================================
 
-    def _ask_owner_email(self) -> str | None:
-        """Hiện popup nhỏ hỏi email owner. Trả None nếu user hủy."""
-
-        dialog = tk.Toplevel(self)
-        dialog.title("Nhập Owner Email")
-        dialog.resizable(False, False)
-        dialog.configure(bg=BG_CARD)
-        dialog.grab_set()
-
-        # Căn giữa cửa sổ
-        dialog.update_idletasks()
-        w, h = 380, 170
-        x = self.winfo_toplevel().winfo_x() + (self.winfo_toplevel().winfo_width() - w) // 2
-        y = self.winfo_toplevel().winfo_y() + (self.winfo_toplevel().winfo_height() - h) // 2
-        dialog.geometry(f"{w}x{h}+{x}+{y}")
-
-        tk.Label(
-            dialog,
-            text="📧  Nhập email (owner):",
-            font=("Helvetica", 12, "bold"),
-            bg=BG_CARD,
-            fg=FG_TITLE,
-        ).pack(padx=20, pady=(15, 5), anchor="w")
-
-        email_var = tk.StringVar(value=API_UPLOAD_OWNER)
-        entry = tk.Entry(
-            dialog,
-            textvariable=email_var,
-            font=("Helvetica", 12),
-            bg=BG_INPUT,
-            fg=FG_TEXT,
-            insertbackground=FG_TEXT,
-            borderwidth=1,
-            highlightthickness=1,
-            highlightcolor=ACCENT_BLUE,
-        )
-        entry.pack(fill="x", padx=20, pady=5, ipady=6)
-        entry.focus_set()
-        entry.select_range(0, "end")
-
-        result: list[str | None] = [None]
-
-        def on_ok(event=None):
-            val = email_var.get().strip()
-            if not val or "@" not in val:
-                entry.config(highlightcolor=ACCENT_RED, highlightbackground=ACCENT_RED)
-                return
-            result[0] = val
-            dialog.destroy()
-
-        def on_cancel():
-            dialog.destroy()
-
-        entry.bind("<Return>", on_ok)
-        dialog.bind("<Escape>", lambda e: on_cancel())
-
-        btn_frame = tk.Frame(dialog, bg=BG_CARD)
-        btn_frame.pack(pady=(10, 15))
-
-        ok_btn = tk.Label(
-            btn_frame,
-            text="  ✓  OK  ",
-            font=("Helvetica", 11, "bold"),
-            bg=ACCENT_BLUE,
-            fg="#ffffff",
-            cursor="hand2",
-            padx=12,
-            pady=5,
-        )
-        ok_btn.pack(side="left", padx=8)
-        ok_btn.bind("<Button-1>", on_ok)
-        ok_btn.bind("<Enter>", lambda e: ok_btn.config(bg=BTN_HOVER_BLUE))
-        ok_btn.bind("<Leave>", lambda e: ok_btn.config(bg=ACCENT_BLUE))
-
-        cancel_btn = tk.Label(
-            btn_frame,
-            text="  Hủy  ",
-            font=("Helvetica", 11),
-            bg="#6b7280",
-            fg="#ffffff",
-            cursor="hand2",
-            padx=12,
-            pady=5,
-        )
-        cancel_btn.pack(side="left", padx=8)
-        cancel_btn.bind("<Button-1>", lambda e: on_cancel())
-        cancel_btn.bind("<Enter>", lambda e: cancel_btn.config(bg="#4b5563"))
-        cancel_btn.bind("<Leave>", lambda e: cancel_btn.config(bg="#6b7280"))
-
-        dialog.wait_window()
-        return result[0]
-
     def _upload(self) -> None:
         if self._busy or self.view_mode != "pending":
             return
@@ -1726,7 +1732,7 @@ class UploadPDFPage(tk.Frame):
                 f"Demo: giả lập upload thành công {total} cặp đã chọn và chuyển "
                 "sang mục Uploaded (di chuyển file sang thư mục uploaded)?"
             )
-            if not messagebox.askyesno("Upload Demo", msg):
+            if not ask_yes_no(self, "Upload Demo", msg):
                 return
             results = []
             stamp = _now_stamp()
@@ -1757,17 +1763,17 @@ class UploadPDFPage(tk.Frame):
             return
 
         # --- Real upload ---
-        owner_email = self._ask_owner_email()
-        if owner_email is None:
+        owner = ask_owner(self, API_UPLOAD_OWNER)
+        if owner is None:
             return  # user hủy
 
         msg = (
             f"Sẽ upload {total} cặp file (PDF + CSV) đã chọn lên server:\n\n"
             f"{file_list}\n\n"
-            f"Owner: {owner_email}\n\n"
+            f"Owner: {owner}\n\n"
             "Xác nhận gửi?"
         )
-        if not messagebox.askyesno("Upload API", msg):
+        if not ask_yes_no(self, "Upload API", msg):
             return
 
         cancel_event = threading.Event()
@@ -1777,7 +1783,7 @@ class UploadPDFPage(tk.Frame):
             # Một session dùng chung cho cả lô: tái dùng kết nối TCP/TLS thay vì
             # bắt tay lại cho từng file.
             log.info(
-                "=== Bắt đầu lô upload: %d cặp, owner=%s ===", total, owner_email
+                "=== Bắt đầu lô upload: %d cặp, owner=%s ===", total, owner
             )
             session = make_session()
             results: list[dict] = []
@@ -1791,7 +1797,7 @@ class UploadPDFPage(tk.Frame):
                     )
                     try:
                         record = self._upload_one(
-                            exp, owner_email, session, cancel_event,
+                            exp, owner, session, cancel_event,
                             uploaded_folder, pending_folder,
                         )
                     except Exception as e:  # noqa: BLE001
@@ -2187,7 +2193,8 @@ class UploadPDFPage(tk.Frame):
 
         uploading = self._cancel_event is not None and not self._cancel_event.is_set()
         if uploading:
-            if not messagebox.askyesno(
+            if not ask_yes_no(
+                self,
                 "Đang upload",
                 "Lô upload đang chạy. Đóng app bây giờ có thể để lại file "
                 "upload dở (server đã nhận nhưng app chưa kịp ghi lại) và cần "

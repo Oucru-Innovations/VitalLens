@@ -15,7 +15,7 @@ import re
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import filedialog, ttk
 
 from apps.config import (
     ACCENT_BLUE,
@@ -45,6 +45,7 @@ from apps.services.upload_api import (
 from apps.widgets import (
     StyledButton, StatusBar, ScrollableFrame, make_header, make_section,
     make_scrollable_listbox, get_sftp_uploader, run_upload_batch,
+    ask_owner, ask_yes_no, show_info, show_warning,
 )
 
 log = logging.getLogger(__name__)
@@ -238,7 +239,8 @@ class MultiUploadPage(tk.Frame):
             return
         files = list_files_recursive(folder)
         if not files:
-            messagebox.showinfo(
+            show_info(
+                self,
                 "Thư mục trống", "Không tìm thấy file nào trong thư mục đã chọn."
             )
             return
@@ -395,13 +397,14 @@ class MultiUploadPage(tk.Frame):
 
     def _upload_all(self):
         if not self.files:
-            messagebox.showinfo("Không có file", "Chưa có file nào để upload.")
+            show_info(self, "Không có file", "Chưa có file nào để upload.")
             return
 
         unresolved = [p for p in self.files if self._route_for(p) is None]
         if unresolved:
             names = "\n".join(f"  {p}" for p in unresolved)
-            messagebox.showwarning(
+            show_warning(
+                self,
                 "Chưa xác định được đích upload",
                 "Các file sau còn thiếu Patient / Date (ddmmyyyy) / Data type, "
                 "hoặc Data type chưa hợp lệ (Xray/ECG/Ultrasound/CT/MRI/Others - "
@@ -432,7 +435,8 @@ class MultiUploadPage(tk.Frame):
         sftp_summary = "\n".join(f"  SFTP/{k}: {len(v)} file" for k, v in sftp_groups.items())
         http_summary = f"  API: {len(http_files)} file" if http_files else ""
         summary = "\n".join(s for s in (sftp_summary, http_summary) if s)
-        if not messagebox.askyesno(
+        if not ask_yes_no(
+            self,
             "Upload", f"Upload {len(self.files)} file theo đích tự động:\n\n{summary}"
         ):
             return
@@ -445,7 +449,8 @@ class MultiUploadPage(tk.Frame):
 
         if sftp_jobs:
             if not SFTP_BUFFER_PATH:
-                messagebox.showwarning(
+                show_warning(
+                    self,
                     "Thiếu cấu hình", "Chưa cấu hình SFTP_BUFFER_PATH trong .env."
                 )
                 return
@@ -469,7 +474,7 @@ class MultiUploadPage(tk.Frame):
                 "Bạn chưa cấu hình API_UPLOAD_URL trong file .env.\n"
                 f"Giả lập upload thành công {len(http_files)} file để demo?"
             )
-            if not messagebox.askyesno("Upload Demo", msg):
+            if not ask_yes_no(self, "Upload Demo", msg):
                 return
             for path in http_files:
                 self._mark_uploaded(path, "API (demo)")
@@ -478,12 +483,9 @@ class MultiUploadPage(tk.Frame):
             self.status.set(f"Demo: {len(http_files)} file đã upload (API)", "success")
             return
 
-        owner = simpledialog.askstring(
-            "Người dùng", "Tên người dùng đang tải dữ liệu:", initialvalue=API_UPLOAD_OWNER, parent=self,
-        )
+        owner = ask_owner(self, API_UPLOAD_OWNER)
         if owner is None:
             return
-        owner = owner.strip()
 
         jobs = [UploadJob(label=os.path.basename(p), files=[p]) for p in http_files]
         uploader = HttpUploader(API_UPLOAD_URL, API_BEARER_TOKEN, owner=owner)
