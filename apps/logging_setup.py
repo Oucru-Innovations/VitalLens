@@ -23,7 +23,7 @@ _NOISY_LOGGERS = (
     "ppocr",
 )
 
-# App chạy với console=False (build_exe.spec) nên log ra stderr không ai thấy.
+# App chạy với console=False (build_nuitka.bat) nên log ra stderr không ai thấy.
 # File log là cách DUY NHẤT để xem lại "đã upload file nào, lúc nào, kết quả
 # ra sao" sau khi sự cố — upload_api.py đã log rất chi tiết, chỉ thiếu nơi lưu.
 _LOG_FILENAME = "vitallens.log"
@@ -82,6 +82,10 @@ def setup_logging(level: int | str = logging.INFO) -> None:
     os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
     os.environ.setdefault("FLAGS_enable_pir_api", "0")
     os.environ.setdefault("GLOG_minloglevel", "2")
+    # Mặc định paddlex/__init__ gọi repo_manager.initialize() (chỉ phục vụ
+    # train) và cấm gọi lần 2. Nếu lần import đầu hỏng giữa chừng, lần import
+    # lại chỉ báo "PDX has already been initialized", che mất lỗi thật.
+    os.environ.setdefault("PADDLE_PDX_EAGER_INIT", "False")
 
     # Suppress warnings that cannot be silenced via loggers.
     warnings.filterwarnings("ignore", message="No ccache found")
@@ -143,8 +147,7 @@ def patch_windows_ssl_cert_store() -> None:
 def patch_paddlex_when_frozen() -> None:
     """Bypass PaddleX dependency checks when running as a packaged binary.
 
-    PaddleX performs dependency checks that fail inside a frozen bundle
-    (PyInstaller lẫn Nuitka). Monkey-patch the check functions to return
+    PaddleX performs dependency checks that fail inside a Nuitka bundle. Monkey-patch the check functions to return
     True/None. Only applied when packaged.
     """
 
@@ -158,7 +161,9 @@ def patch_paddlex_when_frozen() -> None:
         _pdx_deps.require_deps = lambda *a, **kw: None
         _pdx_deps.require_extra = lambda *a, **kw: None
     except Exception:
-        pass
+        # Không chặn app khởi động (trang PDF không cần OCR), nhưng phải ghi
+        # lại: đây là lỗi import paddlex THẬT, X-quang sẽ gặp lại sau.
+        logging.getLogger(__name__).exception("Không import được paddlex lúc khởi động")
 
 
 __all__ = ["setup_logging", "patch_paddlex_when_frozen", "patch_windows_ssl_cert_store"]

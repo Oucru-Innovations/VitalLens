@@ -1,65 +1,32 @@
-# =====================================================================
-# VitalLens - runtime dependencies
+# VitalLens - runtime dependencies (Python 3.13; 3.12 cũng được, 3.14 CHƯA:
+# paddlepaddle 3.3.x/3.4.x chưa có wheel cp314, kể cả trên index của Paddle).
 #
-# Pin cứng (==) để hai máy build ở hai thời điểm ra cùng một bundle.
-# Chỉ pin package DÙNG TRỰC TIẾP; pip tự giải phần phụ thuộc gián tiếp.
-#
-# Rà phiên bản lần cuối: 2026-08-18, Python 3.12.13 / Windows.
-# "Mới nhất" ở đây là bản stable mới nhất TƯƠNG THÍCH với cả stack PaddleX,
-# không phải cứ lấy version lớn nhất trên PyPI (xem hai ngoại lệ bên dưới).
-# Công cụ build (PyInstaller) nằm riêng: requirements-build.txt
-# =====================================================================
+# Chỉ liệt kê gói app import trực tiếp (hoặc nạp làm plugin); pip tự giải phần
+# phụ thuộc gián tiếp. Build EXE: requirements-build.txt.
 
-# --- PaddlePaddle / OCR (nặng nhất: ~380 MB cho paddlepaddle) ---
-paddlepaddle==3.3.1
-paddleocr==3.7.0
-paddlex==3.7.2
+# OCR (apps/processing/xray.py, apps/logging_setup.py).
+# paddleocr -> paddlex[ocr-core] tự khóa opencv-contrib-python==4.10.0.84,
+# numpy<2.4, pypdfium2>=4, shapely, pyclipper... nên không pin lại ở đây.
+paddlepaddle
+paddleocr
+paddlex
 
-# PaddleOCR kéo `paddlex[ocr-core]`, mà extra này khóa CHÍNH XÁC wheel contrib
-# 4.10.0.84. Không thay bằng `opencv-python-headless`: pip vẫn phải cài contrib
-# theo dependency và hai wheel cùng cung cấp namespace `cv2`, dễ ghi đè file của
-# nhau. OpenCV 5.x đã có trên PyPI nhưng chưa tương thích với stack PaddleX 3.7.x.
-opencv-contrib-python==4.10.0.84
+# Ảnh / DICOM (apps/processing/xray.py)
+numpy            # trần <2.4 do paddlex
+Pillow          # cũng giải JPEG baseline + JPEG2000 cho pydicom
+pydicom
+pylibjpeg         # plugin pydicom (không import trực tiếp):
+pylibjpeg-libjpeg #   JPEG lossless + JPEG-LS
 
-# --- Image / DICOM ---
-pydicom==3.0.2
-# PaddleX 3.7.2 khai báo numpy>=1.24,<2.4. Bản 2.3.5 là stable mới nhất còn
-# nằm trong khoảng tương thích; numpy 2.4/2.5 sẽ làm resolver lệch constraint.
-numpy==2.3.5
-Pillow==12.3.0
+# PDF xem/tô đen (apps/pages/upload, apps/pages/ocr, apps/services/pdf_redact.py)
+pypdfium2
 
-# Giải nén DICOM với bộ pin hiện tại:
-#   Pillow               -> JPEG baseline/extended + JPEG2000
-#   pylibjpeg-libjpeg     -> JPEG baseline/lossless + JPEG-LS
-#   pydicom decoder       -> RLE Lossless (thuần Python, có sẵn)
-# Hai plugin dưới đây chỉ là backend thay thế/tăng tốc, không bắt buộc để có
-# JPEG2000/RLE. Nếu bật, phải thêm package + metadata tương ứng vào cả hai cấu
-# hình đóng gói (`build_exe.spec` và `build_nuitka.bat`).
-pylibjpeg==2.1.0
-pylibjpeg-libjpeg==2.4.0
-# pylibjpeg-openjpeg==2.5.0    # backend JPEG2000 thay thế
-# pylibjpeg-rle==2.2.0         # backend RLE native thay thế
+# Excel (apps/processing/xml_to_excel.py, apps/services/*excel*, study_mapping.py)
+openpyxl
 
-# ĐÃ GỠ: `gdcm==1.1`
-#   Đó KHÔNG phải thư viện GDCM chính thức (Summary/Home-page = UNKNOWN,
-#   author "xuhui") và nó KHÔNG import được:
-#     ImportError: DLL load failed while importing _gdcmswig
-#   pydicom báo gdcm_handler.is_available() = False → suốt thời gian qua
-#   nó chỉ chiếm 7.9 MB mà không giải nén được gì.
-#   Nếu muốn đủ codec trong MỘT package, dùng bản chính thức: python-gdcm
+# SFTP (apps/services/sftp_session.py)
+paramiko
 
-# --- PDF ---
-pypdfium2==5.12.1
-
-# --- Excel ---
-openpyxl==3.1.5
-
-# --- SFTP ---
-paramiko==5.0.0
-
-# --- Config / Upload ---
-python-dotenv==1.2.2
-requests==2.34.2
-
-# Multi upload filename parser (apps/services/parser/file_name.py) dùng
-# thẳng `re`/`datetime` stdlib, không cần regex/dateparser/pytz nữa.
+# Cấu hình + upload/cập nhật (apps/config.py, apps/services/upload_api.py, update_check.py)
+python-dotenv
+requests

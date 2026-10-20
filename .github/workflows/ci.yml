@@ -16,7 +16,7 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Syntax check
         run: python -m compileall -q apps main.py
@@ -48,7 +48,7 @@ jobs:
           fi
 
       - name: Vân tay danh mục khớp CATALOG_SHA256
-        # build_exe.spec cũng kiểm tra, nhưng ở đây thì biết sớm hơn 20 phút
+        # verify_catalog.py (bước 1 của build_nuitka.bat) cũng kiểm tra, nhưng ở đây thì biết sớm hơn
         # thay vì hỏng lúc build bản phát hành.
         run: |
           python - <<'PY'

@@ -20,10 +20,8 @@ VitalLens/
 ├── verify_catalog.py        # Standalone catalogue fingerprint check (also step 1 of build_nuitka.bat)
 ├── smoke_nuitka.py          # Manual smoke test for a built EXE
 ├── requirements.txt         # Runtime deps (pinned)
-├── requirements-build.txt   # Runtime + PyInstaller + Nuitka
-├── build_exe.spec           # PyInstaller spec (onedir)
-├── build.bat                # Fast local/debug build (PyInstaller onedir)
-├── build_nuitka.bat         # Release build (Nuitka onefile)
+├── requirements-build.txt   # Runtime + Nuitka
+├── build_nuitka.bat         # Build (Nuitka onefile)
 ├── .env.example             # Tracked template only; no real credential
 ├── icon.ico
 ├── README.md
@@ -40,7 +38,7 @@ VitalLens/
     ├── app.py               # Root Tk window + page navigation
     ├── config.py            # Theme constants + Settings dataclass (env-aware)
     ├── logging_setup.py     # Centralized logging + Paddle env flags
-    ├── runtime_paths.py     # Locate bundle/app dirs under PyInstaller vs Nuitka
+    ├── runtime_paths.py     # Locate bundle/app dirs under Nuitka
     ├── widgets/             # Shared UI widgets
     │   ├── buttons.py       # StyledButton
     │   ├── status.py        # StatusBar
@@ -224,9 +222,9 @@ down in three ways:
 
 | Control | Effect |
 | --- | --- |
-| **Bundle-only path** | A packaged build reads *only* `sys._MEIPASS/database/` (inside `_internal\`). No CSV ships next to `VitalLens.exe`, and a file dropped there is never read. Running from source reads the repo copy. |
+| **Bundle-only path** | A packaged build reads *only* `database/` inside the Nuitka bundle. No CSV ships next to `VitalLens.exe`, and a file dropped there is never read. Running from source reads the repo copy. |
 | **SHA-256 fingerprint** | `CATALOG_SHA256` in [`medical_catalog.py`](apps/services/medical_catalog.py) is checked on every load, *before* parsing. A modified catalogue stops the XML4 feature with an error — it never silently filters by different rules. |
-| **Build-time gate** | `build_exe.spec` recomputes the hash and **refuses to build** on mismatch, so a release can never pair an EXE with a catalogue it does not expect. |
+| **Build-time gate** | `verify_catalog.py` (step 1 of `build_nuitka.bat`) recomputes the hash and **refuses to build** on mismatch, so a release can never pair an EXE with a catalogue it does not expect. |
 
 The fingerprint lives in source, so it is under version control: changing the
 catalogue requires editing the CSV *and* the constant in the same commit, going
@@ -241,7 +239,7 @@ lockdown, and it is deliberate:
 # 2. get the new fingerprint
 python -c "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('database/database_medical.csv').read_bytes()).hexdigest())"
 # 3. paste it into CATALOG_SHA256 in apps\services\medical_catalog.py
-# 4. commit both files together, then build.bat
+# 4. commit both files together, then build_nuitka.bat
 ```
 
 > **What this does and does not stop.** It stops accidental edits, well-meaning
@@ -303,7 +301,7 @@ asking which pipe to use:
 ## Requirements
 
 - **OS**: Windows (primary target for running and building)
-- **Python**: 3.12 (pins last audited on 2026-08-18 with Python 3.12.13)
+- **Python**: 3.13 (3.12 also works; **not 3.14** — paddlepaddle has no cp314 wheel yet)
 - **Environment**: conda or venv — both work. Everything installs via pip, so neither is smaller than the other.
 
 Dependencies are split so a runtime machine never pulls the build toolchain:
@@ -311,14 +309,14 @@ Dependencies are split so a runtime machine never pulls the build toolchain:
 | File | Contents | Install when |
 | --- | --- | --- |
 | `requirements.txt` | Runtime deps, pinned with `==` | Running from source |
-| `requirements-build.txt` | The above **plus** PyInstaller and Nuitka | Building the EXE |
+| `requirements-build.txt` | The above **plus** Nuitka (`[onefile]` for compression) | Building the EXE |
 
 ## Setup
 
 ### Using Conda (recommended)
 
 ```powershell
-conda create -n vitallens python=3.12 -y
+conda create -n vitallens python=3.13 -y
 conda activate vitallens
 pip install -r requirements-build.txt      # or requirements.txt to just run
 ```
@@ -455,8 +453,7 @@ for a temporary override without editing the file.
 - `.env` / `env` are gitignored. Never commit real tokens. Share `.env.example` only.
 - Tokens are issued **per user**, not shared — one leak revokes one account.
 - The app never logs secret values. `config_debug.log` is written **only** when `VITALLENS_DEBUG_CONFIG=1` is set, and redacts secrets to a length.
-- `build.bat` rejects loose secret files in the PyInstaller dist folder;
-  `build_nuitka.bat` rejects repo-root `.env` by default, and CI asserts it is
+- `build_nuitka.bat` rejects repo-root `.env` by default, and CI asserts it is
   absent immediately before compilation.
 
 The per-user `.env` is plaintext and therefore readable, editable, and
@@ -488,25 +485,7 @@ conda activate vitallens
 
 Ensure PaddleOCR models are downloaded before building (run the app once, or let `paddlex` download them automatically to `%USERPROFILE%\.paddlex\official_models`).
 
-### Fast local/debug build (PyInstaller onedir)
-
-```powershell
-conda activate vitallens
-build.bat
-```
-
-The script automatically:
-1. Detects the active Conda `vitallens` environment
-2. Runs PyInstaller with `build_exe.spec`
-3. Copies **`.env.example`** (the template — never the real `.env`) next to the EXE
-4. Copies `icon.ico`, and removes any stale `dist\VitalLens\database\` left by an
-   older build — the catalogue ships inside `_internal\` only
-5. Scans the dist folder for secrets and **fails the build** if any are found
-
-The PyInstaller step also verifies the catalogue fingerprint and aborts on
-mismatch, so this happens before anything else runs.
-
-### Release build (Nuitka onefile)
+### Build (Nuitka onefile)
 
 ```powershell
 conda activate vitallens
@@ -515,47 +494,16 @@ build_nuitka.bat
 
 Nuitka compiles to a **single** `dist_nuitka\VitalLens.exe`: no `_internal\`
 folder, nothing to zip. This is what `release.yml` runs on tag and what end users
-download. Budget 30–90 minutes for the first build (it compiles paddle); the
-PyInstaller path above stays for fast local packaging and debugging.
+download. Budget 30–90 minutes for the first build (it compiles paddle).
 
-Step 1 of the script runs `verify_catalog.py`, the same catalogue fingerprint
-check `build_exe.spec` does for PyInstaller, so a mismatch aborts before Nuitka
+Step 1 of the script runs `verify_catalog.py`, the catalogue fingerprint
+check, so a mismatch aborts before Nuitka
 even starts compiling.
 
 If a `.env` sits at the repo root, `build_nuitka.bat` **stops by default**. For a
 controlled internal-only build, `set VITALLENS_EMBED_ENV=1` opts in to embedding
 and prints a `[WARN]` block. Anyone holding that EXE can extract the token; never
 use the opt-in artifact as a release.
-
-### Manual Build
-
-```powershell
-conda activate vitallens
-python -m PyInstaller build_exe.spec --noconfirm --clean
-copy .env.example dist\VitalLens\.env.example
-```
-
-A manual build skips the automatic secret scan — run the verification checklist
-in the release runbook before shipping.
-
-### PyInstaller debug output layout
-
-```text
-dist\VitalLens\
-├── VitalLens.exe
-├── .env.example       ← template; the user renames it to .env and fills it in
-├── icon.ico
-├── _internal\...      ← PyInstaller runtime + bundled packages
-│   └── database\database_medical.csv   ← the only catalogue copy; fingerprint-checked
-└── ...
-```
-
-There is deliberately **no `database\`** folder next to the EXE. If you see one,
-it is a leftover from an older build — the app ignores it, and its presence only
-misleads users into thinking the catalogue is theirs to edit.
-
-There is deliberately **no `.env`** here. If you see one, the folder is not
-shippable — see the runbook.
 
 ### Ship to End Users
 
@@ -580,8 +528,8 @@ The X-Ray text removal uses PaddleOCR with configurable confidence filters to pr
 
 | Parameter | Default | Description |
 | --- | --- | --- |
-| `OCR_DET_SCORE_THRESHOLD` | 0.8 | Detection confidence — skip text regions detected with < 80% confidence |
-| `OCR_REC_SCORE_THRESHOLD` | 0.8 | Recognition confidence — skip text recognized with < 80% confidence |
+| `OCR_DET_SCORE_THRESHOLD` | 0.6 | Detection box score (`text_det_box_thresh`). Do not raise: clear printed text only scores ~0.80–0.83, so 0.8 would leave patient text unerased |
+| `OCR_REC_SCORE_THRESHOLD` | 0.8 | Recognition confidence (`text_rec_score_thresh`) — skip text recognized with < 80% confidence |
 | `OCR_MIN_TEXT_LENGTH` | 2 | Skip results with fewer than 2 characters |
 | `OCR_MIN_BBOX_AREA` | 100 | Skip detections smaller than 100 px² (width × height) — filters tiny noise |
 

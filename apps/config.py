@@ -25,8 +25,7 @@ log = logging.getLogger(__name__)
 def _resolve_app_dir() -> Path:
     """Return the application root directory.
 
-    Works correctly during development, inside a PyInstaller EXE, and inside
-    a Nuitka binary (kể cả onefile — xem ``apps/runtime_paths.py``).
+    Works correctly during development and inside a Nuitka binary (kể cả onefile — xem ``apps/runtime_paths.py``).
     """
 
     # config.py lives at apps/config.py → parent.parent is the repo root.
@@ -65,7 +64,7 @@ BORDER_COLOR = "#d4d4d4"
 
 
 def _parse_env_file_manually(env_path: Path) -> None:
-    """Fallback parser when ``python-dotenv`` is not importable (PyInstaller).
+    """Fallback parser when ``python-dotenv`` is not importable.
 
     Reads a ``.env`` file in ``KEY=VALUE`` format and writes values into
     ``os.environ``. Blank lines and comment lines (``#``) are skipped.
@@ -135,8 +134,7 @@ def _load_dotenv_if_present(app_dir: Path) -> None:
     Existing ``os.environ`` values are NOT overridden (``override=False``),
     so OS-level environment variables always win over every file.
 
-    When ``python-dotenv`` is not importable (common in PyInstaller
-    bundles), falls back to a simple built-in parser.
+    When ``python-dotenv`` is not importable, falls back to a simple built-in parser.
 
     Chẩn đoán: chỉ ghi ``config_debug.log`` khi biến môi trường
     ``VITALLENS_DEBUG_CONFIG`` được bật, và **không bao giờ** ghi nội dung

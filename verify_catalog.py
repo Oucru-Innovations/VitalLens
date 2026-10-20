@@ -1,8 +1,6 @@
 """Cổng build: chặn nếu ``database/database_medical.csv`` lệch ``CATALOG_SHA256``.
 
-``build_exe.spec`` đã làm việc này cho nhánh PyInstaller. Nuitka không có file
-spec để nhét logic vào, nên tách ra đây cho ``build_nuitka.bat`` gọi — thiếu
-bước này thì bản Nuitka mất luôn bảo đảm "cùng input ra cùng kết quả lọc".
+Bước 1 của ``build_nuitka.bat`` — thiếu bước này thì bản build mất luôn bảo đảm "cùng input ra cùng kết quả lọc".
 
 Đọc hằng số bằng ``ast`` chứ KHÔNG import ``apps.*``: import sẽ kéo theo
 tkinter và nạp ``.env`` ngay lúc build.

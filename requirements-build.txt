@@ -1,20 +1,8 @@
-# =====================================================================
-# VitalLens - build toolchain
-#
-# Chỉ cần trên máy build EXE. Tách khỏi requirements.txt để môi trường
-# chạy app không kéo theo PyInstaller/Nuitka.
-# Rà phiên bản lần cuối: 2026-08-18, Python 3.12.13 / Windows.
-#
+# VitalLens - build toolchain (chỉ máy build). Kéo luôn runtime deps.
 #   pip install -r requirements-build.txt
-# (dòng dưới tự kéo luôn toàn bộ runtime deps)
-# =====================================================================
+# Cần thêm MSVC (Visual Studio Build Tools) trên máy build.
 
 -r requirements.txt
 
-pyinstaller==6.21.0
-pyinstaller-hooks-contrib==2026.6
-
-# Nuitka: nhánh build onefile (build_nuitka.bat) — 1 file .exe duy nhất.
-# Cần thêm MSVC (Visual Studio Build Tools) hoặc clang trên máy build;
-# Nuitka tự tải ccache/dependency-walker khi có --assume-yes-for-downloads.
-nuitka==4.1.3
+# [onefile] kéo zstandard: thiếu nó Nuitka vẫn build nhưng EXE onefile KHÔNG nén.
+nuitka[onefile]

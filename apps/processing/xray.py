@@ -14,13 +14,24 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
 _ocr = None
 _ocr_lock = threading.Lock()
 
+# PP-OCRv6 small: rec đa ngôn ngữ (50 thứ tiếng, có dấu tiếng Việt), độ trễ
+# ngang PP-OCRv5_mobile. Đổi tên ở đây thì phải đổi DET_MODEL/REC_MODEL trong
+# build_nuitka.bat và key cache trong release.yml.
+OCR_DET_MODEL = 'PP-OCRv6_small_det'
+OCR_REC_MODEL = 'PP-OCRv6_small_rec'
+
 # ── Text detection + validation thresholds ────────────────────────────
 # Strategy: detection model finds candidate regions, recognition model
 # VALIDATES which ones are real text. Only confirmed text gets erased.
 #
 # This prevents erasing non-text artifacts (edges, lines, noise) that
 # the detection model may flag as text-like.
-OCR_DET_SCORE_THRESHOLD: float = 0.8   # Detection confidence (candidate regions)
+#
+# Cả hai ngưỡng được truyền vào pipeline PaddleOCR (text_det_box_thresh /
+# text_rec_score_thresh). Đừng nâng ngưỡng det: đo trên PP-OCRv6_small_det,
+# chữ in rõ chỉ đạt box score ~0.80–0.83, chữ tương phản thấp ~0.75 — ngưỡng
+# 0.8 sẽ để lọt PHI. Lọc nhiễu là việc của ngưỡng rec.
+OCR_DET_SCORE_THRESHOLD: float = 0.6   # Detection box score (candidate regions)
 OCR_REC_SCORE_THRESHOLD: float = 0.8   # Recognition confidence (text validation)
 OCR_MIN_TEXT_LENGTH: int = 2            # Skip results with fewer characters
 OCR_MIN_BBOX_AREA: int = 100           # Skip tiny detections (width*height px)
@@ -105,7 +116,7 @@ def _deploy_bundled_models():
     dst_root = Path.home() / '.paddlex' / 'official_models'
     if not src_root.is_dir():
         return
-    for model_name in ['PP-OCRv5_mobile_det', 'en_PP-OCRv5_mobile_rec']:
+    for model_name in (OCR_DET_MODEL, OCR_REC_MODEL):
         src = src_root / model_name
         dst = dst_root / model_name
         if src.is_dir() and not (dst / 'inference.pdiparams').exists():
@@ -137,8 +148,7 @@ def _check_paddlex_deps():
         raise RuntimeError(
             "Bản đóng gói thiếu metadata (dist-info) của: " + ", ".join(missing)
             + ".\nPaddleOCR sẽ không nạp được các thư viện này. Build lại với "
-            "--include-distribution-metadata (Nuitka) hoặc copy_metadata "
-            "(PyInstaller) cho các package trên."
+            "--include-distribution-metadata (build_nuitka.bat) cho các package trên."
         )
 
 
@@ -157,12 +167,14 @@ def _get_ocr():
             _check_paddlex_deps()
             from paddleocr import PaddleOCR
             _ocr = PaddleOCR(
-                text_detection_model_name='PP-OCRv5_mobile_det',
-                text_recognition_model_name='en_PP-OCRv5_mobile_rec',
+                text_detection_model_name=OCR_DET_MODEL,
+                text_recognition_model_name=OCR_REC_MODEL,
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
                 enable_mkldnn=False,
                 use_textline_orientation=False,
+                text_det_box_thresh=OCR_DET_SCORE_THRESHOLD,
+                text_rec_score_thresh=OCR_REC_SCORE_THRESHOLD,
             )
         return _ocr
     return _ocr
@@ -171,14 +183,13 @@ def _get_ocr():
 def _filter_ocr_bboxes(results):
     """Extract bounding boxes from OCR results using recognition as validator.
 
-    Strategy:
-    1. Detection model finds candidate text regions (dt_polys / dt_scores)
-    2. Recognition model reads each region (rec_texts / rec_scores)
-    3. Only regions where recognition CONFIRMS real text are kept
+    The pipeline has already applied both score thresholds (see _get_ocr):
+    detection drops boxes below OCR_DET_SCORE_THRESHOLD, recognition drops
+    regions below OCR_REC_SCORE_THRESHOLD. What survives is in rec_polys /
+    rec_texts / rec_scores, aligned by index. (dt_polys still holds every
+    detected box, so it must NOT be paired with rec_texts by index.)
 
-    A region is considered real text only if ALL conditions are met:
-    - Detection confidence >= OCR_DET_SCORE_THRESHOLD
-    - Recognition confidence >= OCR_REC_SCORE_THRESHOLD
+    On top of that, a region is kept only if:
     - Recognized text has >= OCR_MIN_TEXT_LENGTH characters
     - Recognized text contains at least one alphanumeric character
     - Bounding box area >= OCR_MIN_BBOX_AREA
@@ -187,37 +198,21 @@ def _filter_ocr_bboxes(results):
     """
     bboxes = []
     for res in results:
-        if not res or not res.get("dt_polys"):
+        if not res:
             continue
-        det_scores = res.get("dt_scores", [])
-        rec_texts = res.get("rec_texts", [])
-        rec_scores = res.get("rec_scores", [])
-        for idx, bbox in enumerate(res["dt_polys"]):
-            # 1) Detection confidence check
-            if idx < len(det_scores) and det_scores[idx] < OCR_DET_SCORE_THRESHOLD:
-                continue
+        for bbox, text in zip(res.get("rec_polys", []), res.get("rec_texts", [])):
+            text = text.strip()
 
-            # 2) Recognition must exist and confirm it is text
-            if idx >= len(rec_texts) or idx >= len(rec_scores):
-                continue  # No recognition result → skip (don't erase)
-
-            text = rec_texts[idx].strip()
-            score = rec_scores[idx]
-
-            # 3) Recognition confidence must be high
-            if score < OCR_REC_SCORE_THRESHOLD:
-                continue
-
-            # 4) Text must have minimum length
+            # 1) Text must have minimum length
             if len(text) < OCR_MIN_TEXT_LENGTH:
                 continue
 
-            # 5) Text must contain at least one letter or digit
+            # 2) Text must contain at least one letter or digit
             #    (filters out pure symbols/noise like "---", "...", "|||")
             if not any(c.isalnum() for c in text):
                 continue
 
-            # 6) Bounding box must have minimum area
+            # 3) Bounding box must have minimum area
             xs = [int(p[0]) for p in bbox]
             ys = [int(p[1]) for p in bbox]
             x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
@@ -387,3 +382,16 @@ if __name__ == "__main__":
     for _name in ("JPEGLosslessSV1Decoder", "JPEGLSLosslessDecoder", "RLELosslessDecoder"):
         assert getattr(_decoders, _name).available_plugins, f"{_name}: khong co plugin kha dung"
     print("OK - decoder DICOM day du")
+
+    # Pipeline bỏ box giữa danh sách (rec dưới ngưỡng) thì dt_polys dài hơn
+    # rec_texts: bbox phải lấy từ rec_polys, ghép theo dt_polys là xoá lệch chỗ.
+    _box = lambda x, y: [[x, y], [x + 50, y], [x + 50, y + 20], [x, y + 20]]  # noqa: E731
+    _res = {
+        "dt_polys": [_box(0, 0), _box(0, 100), _box(0, 200)],
+        "rec_polys": [_box(0, 0), _box(0, 200)],                # box giữa bị loại
+        "rec_texts": ["PATIENT", "DOB 1980"],
+        "rec_scores": [0.99, 0.99],
+    }
+    _want = [(0, 0, 50, 20), (0, 200, 50, 220)]
+    assert _filter_ocr_bboxes([_res]) == _want, _filter_ocr_bboxes([_res])
+    print("OK - loc bbox OCR dung vi tri")

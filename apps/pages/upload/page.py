@@ -48,12 +48,14 @@ from apps.config import (
     BTN_HOVER_BLUE,
     BTN_HOVER_ORANGE,
     BTN_HOVER_PURPLE,
+    BTN_HOVER_RED,
     FG_DIM,
     FG_TEXT,
     FG_TITLE,
 )
 from apps.services import export_store
 from apps.services.parser.file_name import parse_13nv_name
+from apps.widgets.date_picker import parse_date_text
 from apps.services.pdf_redact import save_redacted_pdf, temp_output_path
 from apps.services.upload_api import make_session, upload_pair
 from apps.widgets import (
@@ -76,6 +78,11 @@ log = logging.getLogger(__name__)
 
 SAVE_RENDER_SCALE = 3.0
 TYPE_OPTIONS = ("Hematology", "Biochemistry", "Microbiology", "Other")
+DATE_FIELDS = (
+    ("sampling_date", "Sampling Date"),
+    ("receipt_date", "Date of sample receipt"),
+    ("result_date", "Date of results"),
+)
 
 # Thời gian tối đa chờ thread upload dừng khi đóng app (giây).
 SHUTDOWN_JOIN_TIMEOUT = 10.0
@@ -233,8 +240,10 @@ class UploadPDFPage(tk.Frame):
             fg=FG_TITLE,
         ).pack(padx=10, pady=(10, 5), anchor="w")
 
+        pick_row = tk.Frame(top, bg=BG_CARD)
+        pick_row.pack(fill="x", padx=10, pady=(0, 5))
         pick_btn = tk.Label(
-            top,
+            pick_row,
             text="  + Chọn file PDF...  ",
             font=("Helvetica", 11, "bold"),
             bg=ACCENT_ORANGE,
@@ -243,10 +252,24 @@ class UploadPDFPage(tk.Frame):
             padx=8,
             pady=5,
         )
-        pick_btn.pack(padx=10, pady=(0, 5), fill="x")
+        pick_btn.pack(side="left", fill="x", expand=True)
         pick_btn.bind("<Button-1>", lambda e: self._pick_files())
         pick_btn.bind("<Enter>", lambda e: pick_btn.config(bg=BTN_HOVER_ORANGE))
         pick_btn.bind("<Leave>", lambda e: pick_btn.config(bg=ACCENT_ORANGE))
+
+        # Luôn hiện cạnh nút chọn file để dọn file cũ trước khi nạp lô mới;
+        # mờ khi danh sách rỗng (màu đặt ở _refresh_file_list).
+        self.clear_files_btn = tk.Label(
+            pick_row, text="🗑 Clear", font=("Helvetica", 11, "bold"),
+            bg=BORDER_COLOR, fg="#ffffff", cursor="arrow", padx=10, pady=5,
+        )
+        self.clear_files_btn.pack(side="right", padx=(5, 0))
+        self.clear_files_btn.bind("<Button-1>", lambda e: self._clear_file_list())
+        self.clear_files_btn.bind(
+            "<Enter>",
+            lambda e: self.pdf_files and self.clear_files_btn.config(bg=BTN_HOVER_RED))
+        self.clear_files_btn.bind(
+            "<Leave>", lambda e: self._style_clear_files_btn())
 
         file_count_row = tk.Frame(top, bg=BG_CARD)
         file_count_row.pack(fill="x", padx=10)
@@ -255,16 +278,6 @@ class UploadPDFPage(tk.Frame):
             bg=BG_CARD, fg=FG_DIM,
         )
         self.file_count_lbl.pack(side="left")
-        # Chỉ hiện khi danh sách có file (xem _refresh_file_list).
-        self.clear_files_btn = tk.Label(
-            file_count_row, text="✕ Xóa danh sách", font=("Helvetica", 10, "bold"),
-            bg=BG_CARD, fg=FG_DIM, cursor="hand2",
-        )
-        self.clear_files_btn.bind("<Button-1>", lambda e: self._clear_file_list())
-        self.clear_files_btn.bind(
-            "<Enter>", lambda e: self.clear_files_btn.config(fg=ACCENT_RED))
-        self.clear_files_btn.bind(
-            "<Leave>", lambda e: self.clear_files_btn.config(fg=FG_DIM))
 
         list_frame1, self.file_listbox = make_scrollable_listbox(
             top,
@@ -612,10 +625,11 @@ class UploadPDFPage(tk.Frame):
             wrapper = _input_border(row)
             wrapper.pack(side="left", fill="x", expand=True)
 
-            # "Ô" read-only: KHÔNG cho gõ freetext (dễ sai định dạng), chỉ chọn
-            # qua lịch hoặc dán — chuột phải / Ctrl+V trong lịch, giá trị dán
-            # được chuẩn hoá qua `clipboard_date`. Gồm nhãn giá trị (hoặc
-            # placeholder) + nút xóa + icon lịch.
+            # Ô nhập tay: gõ/dán nhiều định dạng (18/8/2026, 2026-08-18,
+            # 18082026...). Rời ô hoặc Enter thì chuẩn hoá về dd-mm-yyyy qua
+            # `parse_date_text`, sai thì viền đỏ; `_save` kiểm tra lại lần cuối
+            # (bấm nút Lưu có thể không làm ô mất focus). Lịch vẫn mở bằng icon
+            # 📅 hoặc Alt+↓.
             field = tk.Frame(wrapper, bg=BG_INPUT)
             field.pack(fill="x")
 
@@ -629,44 +643,67 @@ class UploadPDFPage(tk.Frame):
                 field, text="✕", font=("Helvetica", 10, "bold"),
                 bg=BG_INPUT, fg=FG_DIM, cursor="hand2", padx=4,
             )
-
-            val_lbl = tk.Label(
-                field, anchor="w", font=("Helvetica", 11),
-                bg=BG_INPUT, fg=FG_TEXT, cursor="hand2",
+            hint = tk.Label(
+                field, text="dd-mm-yyyy", font=("Helvetica", 10),
+                bg=BG_INPUT, fg=FG_DIM,
             )
-            val_lbl.pack(side="left", fill="x", expand=True, padx=(8, 2), pady=5)
+
+            entry = tk.Entry(
+                field, textvariable=var, font=("Helvetica", 11),
+                bg=BG_INPUT, fg=FG_TEXT, readonlybackground=BG_INPUT,
+                insertbackground=FG_TEXT, borderwidth=0,
+                highlightthickness=0, relief="flat",
+            )
+            entry.pack(side="left", fill="x", expand=True, ipady=5, padx=(8, 2))
+
+            def editable() -> bool:
+                return self.view_mode != "uploaded" and not self._busy
+
+            def set_error(on: bool) -> None:
+                color = ACCENT_RED if on else BORDER_COLOR
+                wrapper.config(bg=color, highlightbackground=color)
 
             def refresh(*_):
                 readonly = self.view_mode == "uploaded"
                 v = var.get().strip()
-                cur = "arrow" if readonly else "hand2"
-                val_lbl.config(cursor=cur)
-                cal_icon.config(cursor=cur)
-                if v:
-                    val_lbl.config(text=v, fg=FG_TEXT)
-                    if readonly:
-                        clear_btn.pack_forget()
-                    else:
-                        clear_btn.pack(side="right")
+                entry.config(state="readonly" if readonly else "normal")
+                cal_icon.config(cursor="arrow" if readonly else "hand2")
+                if v and not readonly:
+                    clear_btn.pack(side="right")
                 else:
-                    val_lbl.config(text="— chọn ngày —", fg=FG_DIM)
                     clear_btn.pack_forget()
+                if v:
+                    hint.pack_forget()
+                else:
+                    hint.pack(side="right")
+                # Lỗi chỉ BẬT ở commit (đang gõ dở thì chưa báo); hết lỗi thì tắt ngay.
+                if not v or parse_date_text(v):
+                    set_error(False)
 
             var.trace_add("write", refresh)
             self._date_refreshers.append(refresh)
 
-            def open_picker(event=None):
-                if self.view_mode == "uploaded" or self._busy:
+            def commit(event=None):
+                if not editable():
                     return
-                DatePicker(self, var.get(), lambda d: var.set(d), anchor=wrapper)
+                v = var.get().strip()
+                if not v:
+                    return
+                parsed = parse_date_text(v)
+                if parsed is None:
+                    set_error(True)
+                    self.status.set(
+                        f"{label_text.rstrip(':')} không hợp lệ: '{v}' "
+                        "(nhập dd-mm-yyyy)", "error")
+                elif parsed != var.get():
+                    var.set(parsed)
 
-            val_lbl.bind("<Button-1>", open_picker)
-            cal_icon.bind("<Button-1>", open_picker)
-            cal_icon.bind("<Enter>", lambda e: cal_icon.config(bg="#e5e7eb"))
-            cal_icon.bind("<Leave>", lambda e: cal_icon.config(bg=BG_INPUT))
-            clear_btn.bind("<Button-1>", lambda e: (var.set(""), "break")[1])
-            clear_btn.bind("<Enter>", lambda e: clear_btn.config(fg=ACCENT_RED))
-            clear_btn.bind("<Leave>", lambda e: clear_btn.config(fg=FG_DIM))
+            def open_picker(event=None):
+                if not editable():
+                    return "break"
+                DatePicker(self, parse_date_text(var.get()) or "",
+                           lambda d: var.set(d), anchor=wrapper)
+                return "break"
 
             def copy_date():
                 self.clipboard_clear()
@@ -678,22 +715,57 @@ class UploadPDFPage(tk.Frame):
                     self.status.set("Clipboard không chứa ngày hợp lệ (dd-mm-yyyy)", "error")
                     return
                 var.set(value)
+                entry.icursor("end")
+
+            def on_copy(event):
+                if entry.selection_present():
+                    return None  # để Tk copy phần đang bôi đen
+                copy_date()
+                return "break"
+
+            def on_paste(event):
+                if not editable():
+                    return "break"
+                if clipboard_date(self) is None:
+                    return None  # không phải ngày: dán nguyên văn, commit sẽ báo
+                paste_date()
+                return "break"
+
+            def select_all(event):
+                entry.select_range(0, "end")
+                entry.icursor("end")
+                return "break"
+
+            entry.bind("<FocusOut>", commit)
+            entry.bind("<Return>", commit)
+            entry.bind("<<Copy>>", on_copy)
+            entry.bind("<<Paste>>", on_paste)
+            entry.bind("<Control-a>", select_all)
+            entry.bind("<Alt-Down>", open_picker)
+            cal_icon.bind("<Button-1>", open_picker)
+            cal_icon.bind("<Enter>", lambda e: cal_icon.config(bg="#e5e7eb"))
+            cal_icon.bind("<Leave>", lambda e: cal_icon.config(bg=BG_INPUT))
+            clear_btn.bind("<Button-1>", lambda e: (var.set(""), "break")[1])
+            clear_btn.bind("<Enter>", lambda e: clear_btn.config(fg=ACCENT_RED))
+            clear_btn.bind("<Leave>", lambda e: clear_btn.config(fg=FG_DIM))
 
             menu = tk.Menu(self, tearoff=0)
             menu.add_command(label="Copy", command=copy_date)
             menu.add_command(label="Dán ngày", command=paste_date)
+            menu.add_command(label="Chọn từ lịch", command=open_picker)
 
             def show_menu(event):
-                editable = self.view_mode != "uploaded" and not self._busy
+                state = "normal" if editable() else "disabled"
                 menu.entryconfigure(
                     0, state="normal" if var.get().strip() else "disabled")
-                menu.entryconfigure(1, state="normal" if editable else "disabled")
+                menu.entryconfigure(1, state=state)
+                menu.entryconfigure(2, state=state)
                 try:
                     menu.tk_popup(event.x_root, event.y_root)
                 finally:
                     menu.grab_release()
 
-            for w in (field, val_lbl, cal_icon):
+            for w in (field, entry, cal_icon):
                 w.bind("<Button-3>", show_menu)
 
             refresh()
@@ -773,9 +845,8 @@ class UploadPDFPage(tk.Frame):
         type_box.bind("<<ComboboxSelected>>", on_type_selected)
         self.update_type_visibility = on_type_selected
 
-        _date_row("sampling_date", "Sampling Date:")
-        _date_row("receipt_date", "Date of sample receipt:")
-        _date_row("result_date", "Date of results:")
+        for key, label in DATE_FIELDS:
+            _date_row(key, f"{label}:")
 
         tk.Frame(right, bg=BORDER_COLOR, height=1).pack(
             fill="x", padx=10, pady=10
@@ -835,10 +906,14 @@ class UploadPDFPage(tk.Frame):
             text=f"✓ {len(self.pdf_files)} file" if self.pdf_files else "Chưa chọn file",
             fg=ACCENT_GREEN if self.pdf_files else FG_DIM,
         )
-        if self.pdf_files:
-            self.clear_files_btn.pack(side="right")
-        else:
-            self.clear_files_btn.pack_forget()
+        self._style_clear_files_btn()
+
+    def _style_clear_files_btn(self) -> None:
+        enabled = bool(self.pdf_files)
+        self.clear_files_btn.config(
+            bg=ACCENT_RED if enabled else BORDER_COLOR,
+            cursor="hand2" if enabled else "arrow",
+        )
 
     def _clear_file_list(self) -> None:
         """Bỏ hết file khỏi danh sách PDF gốc (không xoá gì trên ổ đĩa).
@@ -1213,7 +1288,7 @@ class UploadPDFPage(tk.Frame):
             patient, file_date = parsed
             data.setdefault("patient_code", patient)
             if file_date:
-                for key in ("sampling_date", "receipt_date", "result_date"):
+                for key, _label in DATE_FIELDS:
                     data.setdefault(key, file_date)
         for key, var in self.form_vars.items():
             if key == "date":
@@ -1516,6 +1591,19 @@ class UploadPDFPage(tk.Frame):
                 self, "Thiếu thông tin", "Vui lòng chọn hoặc nhập Type."
             )
             return
+
+        for key, label in DATE_FIELDS:
+            raw = self.form_vars[key].get().strip()
+            if not raw:
+                continue
+            parsed = parse_date_text(raw)
+            if parsed is None:
+                show_warning(
+                    self, "Ngày không hợp lệ",
+                    f"{label}: '{raw}'\nNhập theo dạng dd-mm-yyyy (vd. 19-10-2026).",
+                )
+                return
+            self.form_vars[key].set(parsed)
 
         output_dir = self.output_var.get().strip()
         if not output_dir:

@@ -12,8 +12,7 @@ thích ngược):
   (cũng chính là lý do `config.py` phải chấp nhận cả tên `env` không dấu chấm).
 
 Nhờ vậy bản phát hành chính thức **không chứa file config nào**. Runner CI sạch
-không có `.env` để Nuitka nhúng; `build.bat` vẫn giữ cổng quét tuyệt đối cho
-bundle PyInstaller dùng debug.
+không có `.env` để Nuitka nhúng, và `build_nuitka.bat` mặc định từ chối nhúng.
 
 Giới hạn bảo mật: token hiện nằm dạng plaintext trong profile người dùng. Không
 thể vừa cho app chạy dưới chính tài khoản đó đọc token, vừa bảo đảm chủ tài

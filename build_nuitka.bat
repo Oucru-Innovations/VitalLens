@@ -6,8 +6,8 @@ cd /d "%~dp0"
 :: VitalLens - Nuitka build (onefile: MOT file VitalLens.exe duy nhat)
 :: Usage: conda activate vitallens && build_nuitka.bat
 ::
-:: Khac biet so voi build.bat (PyInstaller):
-::   - Ket qua la 1 file .exe, khong co thu muc _internal\ di kem.
+:: Ban build chinh thuc duy nhat (PyInstaller da bo):
+::   - Ket qua la 1 file .exe duy nhat.
 ::   - Mac dinh TU CHOI build neu repo root co .env de tranh nhung token that.
 ::   - Chi build noi bo: set VITALLENS_EMBED_ENV=1 de chap nhan nhung .env.
 ::     Secret trong EXE van trich xuat duoc; tuyet doi khong dung file do release.
@@ -56,7 +56,7 @@ if not defined APP_FILEVER (
 )
 echo [INFO] Version: %APP_VERSION% (metadata EXE: %APP_FILEVER%)
 
-:: --- Step 1: Cong danh muc dich vu (giong build_exe.spec) ---
+:: --- Step 1: Cong danh muc dich vu  ---
 echo.
 echo [1/4] Verifying medical catalogue...
 "%PYTHON_EXE%" verify_catalog.py
@@ -66,14 +66,15 @@ if errorlevel 1 exit /b 1
 echo.
 echo [2/4] Checking pre-downloaded PaddleX models...
 set "MODELS=%USERPROFILE%\.paddlex\official_models"
-if not exist "%MODELS%\PP-OCRv5_mobile_det" (
-    echo [ERROR] Thieu %MODELS%\PP-OCRv5_mobile_det
-    echo [ERROR] Chay `python main.py` va xu ly thu 1 anh X-Ray de tai model.
-    exit /b 1
-)
-if not exist "%MODELS%\en_PP-OCRv5_mobile_rec" (
-    echo [ERROR] Thieu %MODELS%\en_PP-OCRv5_mobile_rec
-    exit /b 1
+:: Phai trung OCR_DET_MODEL/OCR_REC_MODEL trong apps\processing\xray.py
+set "DET_MODEL=PP-OCRv6_small_det"
+set "REC_MODEL=PP-OCRv6_small_rec"
+for %%M in (%DET_MODEL% %REC_MODEL%) do (
+    if not exist "%MODELS%\%%M\inference.pdiparams" (
+        echo [ERROR] Thieu %MODELS%\%%M
+        echo [ERROR] Chay `python main.py` va xu ly thu 1 anh X-Ray de tai model.
+        exit /b 1
+    )
 )
 echo [OK] Models found.
 
@@ -140,8 +141,7 @@ if not exist ".env" echo [INFO] Khong co .env - build sach, nguoi dung tu nhap q
 echo.
 echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
 "%PYTHON_EXE%" -m nuitka main.py ^
-  --standalone ^
-  --onefile ^
+  --mode=onefile ^
   --output-dir=dist_nuitka ^
   --output-filename=VitalLens.exe ^
   --remove-output ^
@@ -149,7 +149,7 @@ echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
   --deployment ^
   --lto=no ^
   --jobs=%NUMBER_OF_PROCESSORS% ^
-  --enable-plugin=tk-inter ^
+  --enable-plugins=tk-inter ^
   --windows-console-mode=disable ^
   --windows-icon-from-ico=icon.ico ^
   --company-name=OUCRU ^
@@ -160,8 +160,8 @@ echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
   "--onefile-tempdir-spec={CACHE_DIR}/{COMPANY}/{PRODUCT}/%APP_VERSION%" ^
   --include-data-dir=database=database ^
   --include-data-files=icon.ico=icon.ico ^
-  "--include-data-dir=%MODELS%\PP-OCRv5_mobile_det=paddlex_models\PP-OCRv5_mobile_det" ^
-  "--include-data-dir=%MODELS%\en_PP-OCRv5_mobile_rec=paddlex_models\en_PP-OCRv5_mobile_rec" ^
+  "--include-data-dir=%MODELS%\%DET_MODEL%=paddlex_models\%DET_MODEL%" ^
+  "--include-data-dir=%MODELS%\%REC_MODEL%=paddlex_models\%REC_MODEL%" ^
   %ENV_OPT% ^
   --include-package=paddle ^
   --include-package=paddleocr ^

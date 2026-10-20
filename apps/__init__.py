@@ -8,4 +8,4 @@ Sub-packages:
 - ``apps.processing``: CPU-bound processing (OCR X-Ray, XML → Excel).
 """
 
-__version__ = "1.0.1-rc1"
+__version__ = "1.0.1-rc2"

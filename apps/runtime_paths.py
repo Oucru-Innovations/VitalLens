@@ -1,11 +1,7 @@
-"""Định vị thư mục lúc chạy — dùng chung cho PyInstaller lẫn Nuitka.
+"""Định vị thư mục lúc chạy cho bản build Nuitka.
 
-Hai bộ đóng gói báo hiệu "đang chạy dạng đóng gói" theo hai cách khác nhau và
-KHÔNG cách nào nhận ra cách kia:
-
-    PyInstaller : ``sys.frozen`` = True, tài nguyên nằm ở ``sys._MEIPASS``
-    Nuitka      : biến toàn cục ``__compiled__`` được bơm vào mọi module đã
-                  biên dịch; **không có** ``sys._MEIPASS``
+Nuitka báo hiệu "đang chạy dạng đóng gói" bằng biến toàn cục ``__compiled__``
+được bơm vào mọi module đã biên dịch (không có ``sys.frozen``/``sys._MEIPASS``).
 
 Ở chế độ onefile của Nuitka, hai đường dẫn dưới đây trỏ đi hai nơi khác nhau
 (đã đo bằng ``smoke_nuitka.py``, đừng suy diễn từ tên biến):
@@ -17,10 +13,9 @@ Tên ``containing_dir`` nghe như "chỗ chứa tài nguyên" nhưng nó là ch�
 **EXE**. Lẫn hai cái này thì `.env` nhúng và danh mục dịch vụ đều không đọc
 được, mà app vẫn chạy tiếp với cấu hình rỗng.
 
-Trước đây năm chỗ trong app tự kiểm tra ``sys.frozen``/``sys._MEIPASS`` tại
-chỗ. Với bản Nuitka, chúng sẽ im lặng coi như "đang chạy từ source": danh mục
-dịch vụ tìm sai đường dẫn, model OCR không được bung ra, log ghi nhầm vào
-thư mục cài đặt. Gom về một nơi để không còn chỗ nào sót.
+Mọi chỗ cần biết "đang chạy dạng đóng gói" đều đi qua module này: kiểm tra lẻ
+tẻ ở nơi khác dễ sót, và chỗ sót sẽ im lặng coi như "đang chạy từ source"
+(danh mục dịch vụ tìm sai đường dẫn, log ghi nhầm thư mục).
 
 Module này chỉ import stdlib và không có tác dụng phụ, nên ``logging_setup``
 gọi được mà không phá thứ tự import load-bearing ở ``main.py``.
@@ -35,9 +30,9 @@ __all__ = ["is_frozen", "bundle_dir", "exe_dir", "writable_exe_dir"]
 
 
 def is_frozen() -> bool:
-    """True khi đang chạy dạng đóng gói (EXE PyInstaller hoặc binary Nuitka)."""
+    """True khi đang chạy dạng binary Nuitka."""
 
-    return bool(getattr(sys, "frozen", False) or globals().get("__compiled__"))
+    return globals().get("__compiled__") is not None
 
 
 def bundle_dir() -> Path | None:
@@ -49,9 +44,6 @@ def bundle_dir() -> Path | None:
     ``exe_dir()`` cho việc đó.
     """
 
-    meipass = getattr(sys, "_MEIPASS", "")
-    if meipass:
-        return Path(meipass)                            # PyInstaller: _internal\
     if globals().get("__compiled__") is None:
         return None
     # Nuitka: sys.executable trỏ vào <thư mục bung>\python.exe — file đó không
@@ -67,13 +59,11 @@ def exe_dir() -> Path | None:
     """
 
     compiled = globals().get("__compiled__")
-    if compiled is not None:
-        # Đúng cho cả onefile lẫn standalone; không dùng sys.argv[0] vì nó có
-        # thể là đường dẫn tương đối tuỳ chỗ gọi.
-        return Path(compiled.containing_dir)
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return None
+    if compiled is None:
+        return None
+    # Đúng cho cả onefile lẫn standalone; không dùng sys.argv[0] vì nó có thể
+    # là đường dẫn tương đối tuỳ chỗ gọi.
+    return Path(compiled.containing_dir)
 
 
 def writable_exe_dir() -> Path | None:
@@ -107,13 +97,6 @@ if __name__ == "__main__":
 
     assert not is_frozen() and bundle_dir() is None and exe_dir() is None
     assert writable_exe_dir() is None, "chay tu source thi khong co exe_dir"
-
-    sys.frozen = True                                    # giả lập PyInstaller
-    sys._MEIPASS = str(Path.cwd() / "_internal")
-    assert is_frozen()
-    assert bundle_dir() == Path.cwd() / "_internal"
-    assert exe_dir() == Path(sys.executable).resolve().parent
-    del sys.frozen, sys._MEIPASS
 
     # Giả lập Nuitka onefile: __compiled__ nằm trong globals của chính module.
     # Giá trị lấy từ lần đo thật bằng smoke_nuitka.py — containing_dir là chỗ

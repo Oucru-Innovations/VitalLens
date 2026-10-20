@@ -11,16 +11,16 @@ Danh mục là **dữ liệu cố định của bản phát hành**, không ph�
 người dùng chỉnh được:
 
 - Bản đóng gói (EXE): chỉ đọc từ thư mục tài nguyên bên trong gói
-  (``apps.runtime_paths.bundle_dir()`` — ``_internal/`` với PyInstaller, thư
-  mục bung tạm với Nuitka onefile). Bản phát hành **không** kèm bản CSV rời
+  (``apps.runtime_paths.bundle_dir()`` — thư mục bung tạm của Nuitka
+  onefile). Bản phát hành **không** kèm bản CSV rời
   cạnh EXE nữa, nên sửa file cạnh EXE không còn tác dụng gì.
 - Bản chạy từ source: đọc từ ``<APP_DIR>/database/`` (máy dev là môi trường
   tin cậy, và không có thư mục gói để đọc).
 
 Mọi lần nạp đều đối chiếu SHA-256 với ``CATALOG_SHA256`` hardcode trong file
 này. Vân tay nằm trong source nên nằm trong git: đổi danh mục bắt buộc phải
-đi qua commit + review + build lại, và ``build_exe.spec`` cũng chặn ngay lúc
-build nếu CSV không khớp hằng số. Sửa file trong ``_internal/`` sau khi cài
+đi qua commit + review + build lại, và ``verify_catalog.py`` cũng chặn ngay lúc
+build nếu CSV không khớp hằng số. Sửa file trong thư mục bung sau khi cài
 sẽ làm chức năng XML4 **dừng hẳn với thông báo lỗi**, thay vì âm thầm xuất ra
 kết quả lọc theo một danh mục khác.
 
@@ -58,7 +58,7 @@ CATALOG_FILENAME = "database_medical.csv"
 # Vân tay SHA-256 của bản danh mục được duyệt.
 #
 # Cập nhật danh mục = thay file CSV + thay hằng số này trong CÙNG một commit,
-# rồi build lại. Không khớp thì `build_exe.spec` chặn lúc build và
+# rồi build lại. Không khớp thì `verify_catalog.py` chặn lúc build và
 # `load_catalog()` chặn lúc chạy. Lấy giá trị mới bằng:
 #
 #     python -c "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('database/database_medical.csv').read_bytes()).hexdigest())"
