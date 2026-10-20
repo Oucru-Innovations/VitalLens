@@ -138,6 +138,21 @@ if not exist ".env" echo [INFO] Khong co .env - build sach, nguoi dung tu nhap q
 ::       Nuitka khong tu phat hien; thieu dist-info thi paddlex im lang bo
 ::       qua import va no `NameError: name 'cv2' is not defined` giua
 ::       pipeline OCR. Danh sach duoi day = paddlex[ocr-core].
+::   KHONG nofollow pandas/huggingface_hub/modelscope/aistudio_sdk: paddlex
+::       import chung o dau module (official_models.py, result/mixin.py) nen
+::       thieu la OCR vo ngay luc import (da thu chan tung goi).
+::   --nofollow-import-to=networkx/hf_xet/baidubce/fsspec/anyio : chi bi keo vao
+::       vi --include-package bien dich ca code train/serving/upload (paddle
+::       recompute, modelscope CV, hf_file_system...). Luong OCR khong nap goi
+::       nao trong so nay; hf_hub thieu hf_xet thi tai model bang HTTP thuong.
+::       Crypto/future chi do baidubce keo vao nen tu roi theo.
+::   --nofollow-import-to=wcwidth : prettytable chi goi khi in bang benchmark
+::       cua paddlex (PADDLE_PDX_INFER_BENCHMARK, mac dinh tat).
+::   --noinclude-dlls=cv2/opencv_videoio_ffmpeg* : plugin doc/ghi video (26 MB),
+::       OpenCV chi nap khi mo video; app chi xu ly anh (da kiem DLL nap luc chay).
+::   --noinclude-data-files=cv2/data/* : haarcascade (9 MB), khong ai dung.
+::   KHONG bo mklml.dll/mkldnn.dll cua paddle du da tat enable_mkldnn:
+::       libpaddle.pyd link tinh mkldnn.dll, con mklml.dll van duoc nap luc chay.
 echo.
 echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
 "%PYTHON_EXE%" -m nuitka main.py ^
@@ -189,6 +204,14 @@ echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
   --nofollow-import-to=IPython ^
   --nofollow-import-to=notebook ^
   --nofollow-import-to=pytest ^
+  --nofollow-import-to=networkx ^
+  --nofollow-import-to=hf_xet ^
+  --nofollow-import-to=baidubce ^
+  --nofollow-import-to=fsspec ^
+  --nofollow-import-to=anyio ^
+  --nofollow-import-to=wcwidth ^
+  --noinclude-dlls=cv2/opencv_videoio_ffmpeg* ^
+  --noinclude-data-files=cv2/data/* ^
   --nofollow-import-to=tkinter.test
 
 if errorlevel 1 (
