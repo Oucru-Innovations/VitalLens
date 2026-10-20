@@ -246,6 +246,12 @@ class MultiUploadPage(tk.Frame):
             return
         self._add_files(files)
 
+    def load_files(self, files) -> None:
+        """Nhận file từ trang khác (vd: X-Quang): thêm vào bảng, parse và chọn sẵn."""
+        files = [str(f) for f in files]
+        self._add_files(files)
+        self.tree.selection_set([f for f in files if self.tree.exists(f)])
+
     def _add_files(self, files) -> None:
         existing = set(self.files)
         for f in files:

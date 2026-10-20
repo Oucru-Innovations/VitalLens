@@ -9,14 +9,12 @@ from apps.config import (
     APP_DIR, BG_MAIN, BG_CARD, BG_INPUT, FG_TEXT, FG_DIM,
     ACCENT_BLUE, ACCENT_ORANGE, ACCENT_GREEN, ACCENT_PURPLE,
     BTN_HOVER_BLUE, BTN_HOVER_ORANGE, BTN_HOVER_GREEN, BTN_HOVER_PURPLE,
-    SFTP_BUFFER_PATH,
 )
 from apps.widgets import (
     StyledButton, StatusBar, make_header, make_section,
-    ScrollableFrame, make_scrollable_listbox, show_info, show_warning, show_error, ask_yes_no,
-    get_sftp_uploader, run_upload_batch,
+    ScrollableFrame, make_scrollable_listbox, show_info, show_warning, show_error,
 )
-from apps.services.upload_api import UploadJob
+from apps.pages.multi_upload_page import MultiUploadPage
 from apps.processing.xray import run_xray_processing, _plan_output_paths
 
 
@@ -158,18 +156,8 @@ class XRayPage(tk.Frame):
         if not self._last_output_files:
             show_info(self, "Không có file", "Chưa có ảnh đã xử lý để upload.")
             return
-        if not SFTP_BUFFER_PATH:
-            show_warning(self, "Thiếu cấu hình", "Chưa cấu hình SFTP_BUFFER_PATH trong .env.")
-            return
-        if not ask_yes_no(
-            self,
-            "Upload",
-            f"Upload {len(self._last_output_files)} file ảnh đã xử lý lên không gian lưu trữ?",
-        ):
-            return
-
-        run_upload_batch(
-            self, self.upload_btn, self.status,
-            get_sftp_uploader(self, SFTP_BUFFER_PATH),
-            [UploadJob(label="xray", files=self._last_output_files)],
-        )
+        # Chuyển sang trang Upload File: file đã xử lý được chọn sẵn, trang đó
+        # tự parse Study/Patient/Date và để người dùng kiểm tra rồi upload.
+        multi = self.controller.frames[MultiUploadPage]
+        multi.load_files(self._last_output_files)
+        self.controller.show_frame(MultiUploadPage)
