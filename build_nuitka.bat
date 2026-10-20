@@ -138,6 +138,13 @@ if not exist ".env" echo [INFO] Khong co .env - build sach, nguoi dung tu nhap q
 ::       Nuitka khong tu phat hien; thieu dist-info thi paddlex im lang bo
 ::       qua import va no `NameError: name 'cv2' is not defined` giua
 ::       pipeline OCR. Danh sach duoi day = paddlex[ocr-core].
+::   --include-package=filelock/dateutil : ca hai nap submodule qua
+::       import_module(<chuoi>) trong __getattr__ (filelock 4.x: "._soft"...),
+::       Nuitka khong thay => "No module named 'filelock._soft'" khi modelscope
+::       import, OCR chet ngay. Da tai hien va kiem bang ban build Nuitka nho.
+::   --include-package=chardet + data "chardet:*.bin" : chardet 7.x nap model
+::       models.bin...; Nuitka mac dinh bo duoi .bin du co --include-package-data.
+::       requests goi chardet khi doc response.text khong khai charset.
 ::   KHONG nofollow pandas/huggingface_hub/modelscope/aistudio_sdk: paddlex
 ::       import chung o dau module (official_models.py, result/mixin.py) nen
 ::       thieu la OCR vo ngay luc import (da thu chan tung goi).
@@ -185,6 +192,10 @@ echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
   --include-package=pydicom ^
   --include-package=pylibjpeg ^
   --include-package=libjpeg ^
+  --include-package=filelock ^
+  --include-package=dateutil ^
+  --include-package=chardet ^
+  "--include-package-data=chardet:*.bin" ^
   --include-package-data=paddle ^
   --include-package-data=paddleocr ^
   --include-package-data=paddlex ^
