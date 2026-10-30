@@ -38,7 +38,7 @@ class HomePage(tk.Frame):
         from apps.pages.multi_upload_page import MultiUploadPage
 
         btn_data = [
-            ("Xử lý XML → Excel", "Giải mã XML4, đối chiếu danh mục dịch vụ → Excel",
+            ("Xử lý XML → Excel", "Giải mã XML4/XML3, đối chiếu danh mục dịch vụ → Excel",
              ACCENT_BLUE, BTN_HOVER_BLUE, XMLToExcelPage),
             ("Xử lý ảnh X-Quang", "Xóa text burned-in + anonymize metadata DICOM",
              ACCENT_ORANGE, BTN_HOVER_ORANGE, XRayPage),

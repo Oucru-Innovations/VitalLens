@@ -1,6 +1,11 @@
-"""Xử lý XML → Excel: giải mã Base64 các FILEHOSO loại XML4, xuất Excel.
+"""Xử lý XML → Excel: giải mã Base64 các FILEHOSO loại XML4 và XML3, xuất Excel.
 
-Chỉ XML4 được xử lý; các loại hồ sơ khác (XML1/2/3/…) bị bỏ qua hoàn toàn.
+Chỉ XML4 và XML3 được xử lý; các loại hồ sơ khác (XML1/2/5/…) bị bỏ qua.
+
+XML3 chỉ giữ dòng ``MA_NHOM`` = 1 (xét nghiệm) và chỉ xuất các cột trong
+``XML3_COLUMNS``; sau đó đi qua đúng các bước lọc như XML4 (danh mục, danh sách
+nghiên cứu/khoảng ngày theo ``NGAY_KQ``, mapping) và ra các sheet ``XML3_*``
+riêng. Sheet Summary vẫn chỉ tính trên XML4.
 
 Mỗi bản ghi được đối chiếu với danh mục dịch vụ (``database_medical.csv``)
 qua ``MA_DICH_VU`` = ``ID_SERVICE`` để lấy tên phương pháp (cột ``Name_Method``
@@ -49,8 +54,17 @@ from apps.services.excel_export import (
 
 log = logging.getLogger(__name__)
 
-# Loại hồ sơ duy nhất được xuất ra Excel.
-TARGET_LOAIHOSO = "XML4"
+# Các loại hồ sơ được xuất ra Excel.
+TARGET_LOAIHOSO = ("XML4", "XML3")
+
+# XML3: chỉ lấy dòng xét nghiệm, và chỉ các cột này (theo thứ tự). MA_PTTT_QT
+# có trong schema nhưng hồ sơ thường để trống — vẫn xuất cột cho đủ schema.
+# MA_MAY giữ lại để đối chiếu ngưỡng tham chiếu theo máy.
+XML3_LAB_GROUP = "1"
+XML3_COLUMNS = (
+    "MA_LK", "MA_DICH_VU", "MA_PTTT_QT", "MA_NHOM", "TEN_DICH_VU",
+    "MA_BENH", "NGAY_YL", "NGAY_TH_YL", "NGAY_KQ", "MA_MAY",
+)
 
 # XML4: lấy hết các cột, trừ những cột này.
 XML4_EXCLUDED_COLUMNS = {"MA_BS_DOC_KQ"}
@@ -77,6 +91,9 @@ STUDY_HIDDEN_COLUMNS = frozenset({"ID", LINK_CODE_COLUMN})
 SHEET_INCLUDE = "XML4_Include"
 SHEET_UNCLASSIFIED = "XML4_ChuaPhanLoai"
 SHEET_NO_STUDY = "XML4_KhongKhopHRN"
+SHEET3_INCLUDE = "XML3_Include"
+SHEET3_UNCLASSIFIED = "XML3_ChuaPhanLoai"
+SHEET3_NO_STUDY = "XML3_KhongKhopHRN"
 SHEET_SUMMARY = "Summary"
 
 # Cột cố định của sheet Summary (chỉ có khi chạy chế độ danh sách nghiên cứu).
@@ -206,15 +223,15 @@ def _extract_all_records(root):
 
 
 def process_xml_file(xml_filepath):
-    """Giải mã mọi FILEHOSO loại XML4 trong 1 file.
+    """Giải mã mọi FILEHOSO loại XML4/XML3 trong 1 file.
 
-    Trả ``(records, n_payload_loi)`` — ``n_payload_loi`` là số payload XML4
+    Trả ``({loại: records}, n_payload_loi)`` — ``n_payload_loi`` là số payload
     giải mã/parse không được. Phải trả về để ``_collect_and_save`` còn báo cho
     người dùng biết có bao nhiêu hồ sơ đã bị bỏ, thay vì chỉ ghi vào log.
     """
 
     filename = os.path.basename(xml_filepath)
-    records_out = []
+    records_out = {loai: [] for loai in TARGET_LOAIHOSO}
     n_bad = 0
 
     try:
@@ -232,7 +249,7 @@ def process_xml_file(xml_filepath):
         if loai_node is None or content_node is None:
             continue
         loai_hoso = (loai_node.text or "").strip()
-        if loai_hoso != TARGET_LOAIHOSO:
+        if loai_hoso not in TARGET_LOAIHOSO:
             continue
         b64_content = content_node.text.strip() if content_node.text else ""
         if not b64_content:
@@ -250,12 +267,24 @@ def process_xml_file(xml_filepath):
             if "ID" in rec:
                 rec["ID_GOC"] = rec["ID"]
             rec["ID"] = file_id
-        records_out.extend(records)
+        records_out[loai_hoso].extend(records)
 
     return records_out, n_bad
 
 
-def _sheet_columns(records, extra_columns=(), lead_column="ID", hidden_columns=()):
+def _xml3_lab_records(records):
+    """Chỉ giữ dòng XML3 xét nghiệm, cắt về ``XML3_COLUMNS`` (+ ID/ID_GOC để ghép)."""
+
+    keep = ("ID", "ID_GOC") + XML3_COLUMNS
+    return [
+        {c: rec.get(c, "") for c in keep}
+        for rec in records
+        if rec.get("MA_NHOM") == XML3_LAB_GROUP
+    ]
+
+
+def _sheet_columns(records, extra_columns=(), lead_column="ID", hidden_columns=(),
+                   base_columns=None):
     """Cột của 1 sheet: ``lead_column`` đứng đầu, TEN_DICH_VU ngay sau MA_DICH_VU.
 
     ``extra_columns`` (các cột từ file mapping tổng quát) luôn được đưa vào
@@ -266,7 +295,14 @@ def _sheet_columns(records, extra_columns=(), lead_column="ID", hidden_columns=(
     MA_NTG thì ẩn ID và MA_LK, còn sheet "không khớp EMR_ID" phải giữ nguyên
     hai cột đó — nó tồn tại để người dùng rà soát, ẩn định danh đi thì rà bằng
     gì.
+
+    ``base_columns`` (XML3) cố định danh sách + thứ tự cột thay vì lấy hết.
     """
+
+    if base_columns is not None:
+        return [lead_column] + [
+            c for c in base_columns if c not in hidden_columns
+        ] + list(extra_columns)
 
     columns = [lead_column] + [
         k for k in collect_columns(records)
@@ -299,16 +335,15 @@ def _split_by_catalog(records, catalog):
     included, unclassified, n_excluded = [], [], 0
     for rec in records:
         entry = medical_catalog.lookup(catalog, rec.get(SERVICE_CODE_COLUMN))
-        if entry is None:
-            rec[NAME_METHOD_COLUMN] = ""
-            unclassified.append(rec)
-        elif entry.group == medical_catalog.GROUP_EXCLUDE:
+        if entry is not None and entry.group == medical_catalog.GROUP_EXCLUDE:
             n_excluded += 1
-        elif entry.group == medical_catalog.GROUP_INCLUDE:
-            rec[NAME_METHOD_COLUMN] = entry.name_method
+            continue
+        # XML3 đã có TEN_DICH_VU riêng thì giữ nguyên; XML4 không có trường này.
+        if not rec.get(NAME_METHOD_COLUMN):
+            rec[NAME_METHOD_COLUMN] = entry.name_method if entry else ""
+        if entry is not None and entry.group == medical_catalog.GROUP_INCLUDE:
             included.append(rec)
         else:
-            rec[NAME_METHOD_COLUMN] = entry.name_method
             unclassified.append(rec)
     return included, unclassified, n_excluded
 
@@ -544,7 +579,7 @@ def _dropped_input_warning(failed_files, n_bad_payloads):
             listed += f", …(+{len(failed_files) - MAX_LISTED_FAILED_FILES})"
         parts.append(f"{len(failed_files)} file không đọc được: {listed}")
     if n_bad_payloads:
-        parts.append(f"{n_bad_payloads} hồ sơ {TARGET_LOAIHOSO} hỏng đã bị bỏ")
+        parts.append(f"{n_bad_payloads} hồ sơ {'/'.join(TARGET_LOAIHOSO)} hỏng đã bị bỏ")
     if not parts:
         return ""
     return "\n⚠ " + "; ".join(parts) + ". Xem log để biết chi tiết."
@@ -589,7 +624,7 @@ def _collect_and_save(xml_files, output_path, mapping_path=None):
             except mapping_excel.MappingError as e:
                 return False, f"Lỗi file mapping — {e}"
 
-    all_records = []
+    all_records = {loai: [] for loai in TARGET_LOAIHOSO}
     failed_files = []
     n_bad_payloads = 0
     max_workers = min(8, len(xml_files), os.cpu_count() or 4)
@@ -605,20 +640,23 @@ def _collect_and_save(xml_files, output_path, mapping_path=None):
                 log.warning("Lỗi xử lý %s: %s", xf, e)
                 failed_files.append(os.path.basename(xf))
                 continue
-            all_records.extend(records)
+            for loai, recs in records.items():
+                all_records[loai].extend(recs)
             n_bad_payloads += n_bad
 
     warning = _dropped_input_warning(failed_files, n_bad_payloads)
 
-    if not all_records:
+    xml3_records = _xml3_lab_records(all_records["XML3"])
+    if not all_records["XML4"] and not xml3_records:
         return False, (
-            f"Không có dữ liệu {TARGET_LOAIHOSO} trong các file đã chọn!{warning}"
+            f"Không có dữ liệu XML4 / XML3 xét nghiệm trong các file đã chọn!{warning}"
         )
 
-    included, unclassified, n_excluded = _split_by_catalog(all_records, catalog)
-    if not included and not unclassified:
+    included, unclassified, n_excluded = _split_by_catalog(all_records["XML4"], catalog)
+    inc3, unc3, n_exc3 = _split_by_catalog(xml3_records, catalog)
+    if not (included or unclassified or inc3 or unc3):
         return False, (
-            f"Toàn bộ {n_excluded} bản ghi đều thuộc nhóm Exclude — "
+            f"Toàn bộ {n_excluded + n_exc3} bản ghi đều thuộc nhóm Exclude — "
             f"không còn gì để xuất.{warning}"
         )
 
@@ -626,35 +664,42 @@ def _collect_and_save(xml_files, output_path, mapping_path=None):
     mapping_note = ""
     if mapping is not None:
         mapping_columns = mapping.value_columns
-        n_matched = (
-            _apply_mapping(included, mapping) + _apply_mapping(unclassified, mapping)
-        )
+        groups = (included, unclassified, inc3, unc3)
+        n_matched = sum(_apply_mapping(g, mapping) for g in groups)
         mapping_note = (
             f"\nMapping '{mapping.source_name}' (join theo {mapping.key_column}): "
-            f"{n_matched}/{len(included) + len(unclassified)} bản ghi khớp."
+            f"{n_matched}/{sum(map(len, groups))} bản ghi khớp."
         )
 
-    # Mỗi sheet mang bộ cột riêng: (tên sheet, bản ghi, cột đứng đầu, cột bị ẩn).
+    # Mỗi sheet mang bộ cột riêng: (tên sheet, bản ghi, cột đứng đầu, cột bị
+    # ẩn, cột cố định — None = lấy hết như XML4).
     summary_rows = []
     if study is None:
         sheets = [
-            (SHEET_INCLUDE, included, "ID", ()),
-            (SHEET_UNCLASSIFIED, unclassified, "ID", ()),
+            (SHEET_INCLUDE, included, "ID", (), None),
+            (SHEET_UNCLASSIFIED, unclassified, "ID", (), None),
+            (SHEET3_INCLUDE, inc3, "ID", (), XML3_COLUMNS),
+            (SHEET3_UNCLASSIFIED, unc3, "ID", (), XML3_COLUMNS),
         ]
     else:
         stats = _new_study_stats()
         included, no_study_inc = _split_by_study(included, study, stats)
         unclassified, no_study_unc = _split_by_study(unclassified, study, stats)
+        inc3, no_study_inc3 = _split_by_study(inc3, study, stats)
+        unc3, no_study_unc3 = _split_by_study(unc3, study, stats)
         mapping_note = _study_note(study, stats)
         # Tính Summary TRƯỚC khi included/unclassified có thêm cột mapping ở
         # dưới — không ảnh hưởng gì (chỉ đọc STUDY_ID_COLUMN/SERVICE_CODE_COLUMN
         # /RESULT_DATE_COLUMN) nhưng để cạnh _split_by_study cho dễ theo dõi.
         summary_rows = _build_summary_rows(included, unclassified, study)
         sheets = [
-            (SHEET_INCLUDE, included, STUDY_ID_COLUMN, STUDY_HIDDEN_COLUMNS),
-            (SHEET_UNCLASSIFIED, unclassified, STUDY_ID_COLUMN, STUDY_HIDDEN_COLUMNS),
+            (SHEET_INCLUDE, included, STUDY_ID_COLUMN, STUDY_HIDDEN_COLUMNS, None),
+            (SHEET_UNCLASSIFIED, unclassified, STUDY_ID_COLUMN, STUDY_HIDDEN_COLUMNS, None),
             # Sheet rà soát: giữ nguyên ID/MA_LK để còn truy ngược được.
-            (SHEET_NO_STUDY, no_study_inc + no_study_unc, "ID", ()),
+            (SHEET_NO_STUDY, no_study_inc + no_study_unc, "ID", (), None),
+            (SHEET3_INCLUDE, inc3, STUDY_ID_COLUMN, STUDY_HIDDEN_COLUMNS, XML3_COLUMNS),
+            (SHEET3_UNCLASSIFIED, unc3, STUDY_ID_COLUMN, STUDY_HIDDEN_COLUMNS, XML3_COLUMNS),
+            (SHEET3_NO_STUDY, no_study_inc3 + no_study_unc3, "ID", (), XML3_COLUMNS),
         ]
 
     # write_only: openpyxl ghi thẳng từng dòng ra file thay vì dựng toàn bộ đối
@@ -677,13 +722,14 @@ def _collect_and_save(xml_files, output_path, mapping_path=None):
             ]
             append_row_as_text(ws, values, alerts=alerts)
 
-    for title, records, lead_column, hidden_columns in sheets:
+    for title, records, lead_column, hidden_columns, base_columns in sheets:
         if not records:
             continue
         ws = wb.create_sheet(title=sanitize_sheet_name(title, default="Sheet"))
         columns = _sheet_columns(
             records, mapping_columns,
             lead_column=lead_column, hidden_columns=hidden_columns,
+            base_columns=base_columns,
         )
         # append_row_as_text: giá trị xét nghiệm kiểu "=<0.5" phải giữ nguyên
         # văn bản, không được biến thành công thức Excel.
@@ -693,14 +739,16 @@ def _collect_and_save(xml_files, output_path, mapping_path=None):
 
     wb.save(output_path)
     return True, (
-        f"Hoàn thành! {len(included)} bản ghi được trích xuất, "
+        f"Hoàn thành! XML4: {len(included)} bản ghi được trích xuất, "
         f"{len(unclassified)} chưa có trong danh mục, "
-        f"{n_excluded} nằm ngoài danh mục và khung thời gian.{mapping_note}{warning}"
+        f"{n_excluded} nằm ngoài danh mục và khung thời gian. "
+        f"XML3 (xét nghiệm): {len(inc3)} trích xuất, {len(unc3)} chưa có "
+        f"trong danh mục, {n_exc3} Exclude.{mapping_note}{warning}"
     )
 
 
 def run_xml_to_excel(xml_files, output_path, callback, mapping_path=None):
-    """Giải mã XML4 song song, đối chiếu danh mục và xuất Excel.
+    """Giải mã XML4/XML3 song song, đối chiếu danh mục và xuất Excel.
 
     ``mapping_path`` là file Excel mapping tuỳ chọn của người dùng; bỏ trống
     thì luồng xử lý y như cũ.
