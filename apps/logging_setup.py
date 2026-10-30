@@ -93,8 +93,15 @@ def setup_logging(level: int | str = logging.INFO) -> None:
         "ignore", message=".*doesn't match a supported version"
     )
 
-    fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    # VITALLENS_LOG_LEVEL=DEBUG ghi cả tiến độ từng bước (status "working"/"info")
+    # khi cần soi một lỗi khó; mặc định INFO chỉ giữ mốc chính + lỗi.
+    env_level = os.environ.get("VITALLENS_LOG_LEVEL", "").strip().upper()
+    # Gõ sai (vd "VERBOSE") thì basicConfig ném ValueError → EXE chết lặng lúc mở.
+    if isinstance(logging.getLevelName(env_level), int):
+        level = env_level
+    fmt = "%(asctime)s %(levelname)s [%(threadName)s] %(name)s: %(message)s"
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
+    log_dir: Path | None = None
     try:
         log_dir = _resolve_log_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -107,12 +114,86 @@ def setup_logging(level: int | str = logging.INFO) -> None:
         handlers.append(file_handler)
     except OSError:
         # Thư mục không ghi được (quyền, ổ đầy...) → vẫn chạy tiếp với stderr.
-        pass
+        log_dir = None
 
     logging.basicConfig(level=level, format=fmt, handlers=handlers)
 
     for name in _NOISY_LOGGERS:
         logging.getLogger(name).setLevel(logging.ERROR)
+
+    _install_crash_hooks(log_dir)
+    _log_startup_banner(log_dir)
+
+
+_crash_file = None  # giữ file mở suốt đời process cho faulthandler
+
+
+def _install_crash_hooks(log_dir: Path | None) -> None:
+    """Đưa mọi lỗi không ai bắt vào file log.
+
+    EXE chạy không console: traceback in ra stderr là mất. Ba đường lọt:
+    - exception ở main thread (sys.excepthook)
+    - exception trong thread nền: OCR, upload, SFTP (threading.excepthook)
+    - crash native (access violation trong DLL/mã biên dịch): Python không kịp
+      ném exception, chỉ faulthandler ghi được stack — vào ``crash.log``.
+    Exception trong callback Tkinter đi đường riêng, xem ``App.report_callback_exception``.
+    """
+
+    import faulthandler
+    import threading
+
+    log = logging.getLogger("apps.crash")
+
+    def _excepthook(exc_type, exc, tb):
+        if not issubclass(exc_type, KeyboardInterrupt):
+            log.critical("Lỗi không bắt được ở main thread", exc_info=(exc_type, exc, tb))
+        sys.__excepthook__(exc_type, exc, tb)
+
+    def _thread_excepthook(args):
+        if args.exc_type is not SystemExit:
+            log.critical(
+                "Lỗi không bắt được trong thread %s",
+                getattr(args.thread, "name", "?"),
+                exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+            )
+
+    sys.excepthook = _excepthook
+    threading.excepthook = _thread_excepthook
+
+    global _crash_file
+    if log_dir is None:
+        return
+    try:
+        path = log_dir / "crash.log"
+        # ponytail: chỉ cắt khi >1 MB lúc khởi động, đủ vì mỗi lần chạy thêm 1 dòng.
+        mode = "w" if path.exists() and path.stat().st_size > 1024 * 1024 else "a"
+        _crash_file = open(path, mode, encoding="utf-8")
+        from datetime import datetime
+
+        _crash_file.write(f"=== start {datetime.now():%Y-%m-%d %H:%M:%S} pid={os.getpid()}\n")
+        _crash_file.flush()
+        faulthandler.enable(file=_crash_file, all_threads=True)
+    except OSError:
+        _crash_file = None
+
+
+def _log_startup_banner(log_dir: Path | None) -> None:
+    """Mốc đầu mỗi lần chạy: biết log thuộc bản nào, chạy ở đâu."""
+
+    import platform
+
+    from apps import __version__
+
+    logging.getLogger("apps").info(
+        "===== VitalLens %s khởi động | %s | python %s | %s | exe=%s | cwd=%s | log=%s",
+        __version__,
+        "EXE" if is_frozen() else "source",
+        platform.python_version(),
+        platform.platform(),
+        sys.executable,
+        os.getcwd(),
+        log_dir,
+    )
 
 
 def patch_windows_ssl_cert_store() -> None:

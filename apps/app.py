@@ -1,9 +1,11 @@
 """App - Cửa sổ chính với điều hướng giữa các trang."""
 
+import logging
 import platform
 import tkinter as tk
 
 from apps.config import APP_DIR, BG_MAIN
+from apps.runtime_paths import bundle_dir
 from apps.services.sftp_session import SftpSessionManager
 from apps.pages.home import HomePage
 from apps.pages.xml_page import XMLToExcelPage
@@ -11,6 +13,8 @@ from apps.pages.xray_page import XRayPage
 from apps.pages.ocr import OCRPage
 from apps.pages.upload import UploadPDFPage
 from apps.pages.multi_upload_page import MultiUploadPage
+
+log = logging.getLogger(__name__)
 
 
 class App(tk.Tk):
@@ -41,7 +45,13 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def show_frame(self, page_class):
+        log.info("Mở trang %s", page_class.__name__)
         self.frames[page_class].tkraise()
+
+    def report_callback_exception(self, exc_type, exc, tb):
+        # Tk mặc định in traceback của callback (bấm nút, after()) ra stderr —
+        # bản EXE không có console nên lỗi biến mất. Đưa vào file log.
+        log.error("Lỗi trong callback giao diện", exc_info=(exc_type, exc, tb))
 
     def _on_close(self):
         # Cho các trang cơ hội dọn tài nguyên (đóng PDF handle, ...). Trang nào
@@ -63,15 +73,17 @@ class App(tk.Tk):
                     if on_close() is False:
                         return
                 except Exception:
-                    pass
+                    log.exception("on_close() của %s lỗi", type(frame).__name__)
         try:
             SftpSessionManager.instance().close()
         except Exception:
-            pass
+            log.exception("Đóng phiên SFTP lỗi")
+        log.info("Đóng ứng dụng")
         self.destroy()
 
     def _apply_app_icon(self):
-        icon_path = APP_DIR / "icon.ico"
+        # EXE: icon.ico được nhúng vào thư mục bung tạm, không nằm cạnh EXE.
+        icon_path = (bundle_dir() or APP_DIR) / "icon.ico"
         if not icon_path.exists():
             return
 

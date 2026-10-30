@@ -145,21 +145,16 @@ if not exist ".env" echo [INFO] Khong co .env - build sach, nguoi dung tu nhap q
 ::   --include-package=chardet + data "chardet:*.bin" : chardet 7.x nap model
 ::       models.bin...; Nuitka mac dinh bo duoi .bin du co --include-package-data.
 ::       requests goi chardet khi doc response.text khong khai charset.
-::   KHONG nofollow pandas/huggingface_hub/modelscope/aistudio_sdk: paddlex
-::       import chung o dau module (official_models.py, result/mixin.py) nen
-::       thieu la OCR vo ngay luc import (da thu chan tung goi).
-::   --nofollow-import-to=networkx/hf_xet/baidubce/fsspec/anyio : chi bi keo vao
-::       vi --include-package bien dich ca code train/serving/upload (paddle
-::       recompute, modelscope CV, hf_file_system...). Luong OCR khong nap goi
-::       nao trong so nay; hf_hub thieu hf_xet thi tai model bang HTTP thuong.
-::       Crypto/future chi do baidubce keo vao nen tu roi theo.
-::   --nofollow-import-to=wcwidth : prettytable chi goi khi in bang benchmark
-::       cua paddlex (PADDLE_PDX_INFER_BENCHMARK, mac dinh tat).
-::   --noinclude-dlls=cv2/opencv_videoio_ffmpeg* : plugin doc/ghi video (26 MB),
-::       OpenCV chi nap khi mo video; app chi xu ly anh (da kiem DLL nap luc chay).
-::   --noinclude-data-files=cv2/data/* : haarcascade (9 MB), khong ai dung.
-::   KHONG bo mklml.dll/mkldnn.dll cua paddle du da tat enable_mkldnn:
-::       libpaddle.pyd link tinh mkldnn.dll, con mklml.dll van duoc nap luc chay.
+::   --noinclude-custom-mode=paddlex.utils.import_guard:bytecode : Nuitka 4.3.1
+::       bien dich SAI ham import_paddle_module (try/finally quanh import_module):
+::       "SystemError: <compiled_function import_paddle_module> returned NULL
+::       without setting an exception", trong app hien thanh access violation
+::       ngay lan OCR dau tien (crash.log: import_guard.py ... get_default_device).
+::       Giu module nay o dang bytecode. Da tai hien + kiem bang ban build probe.
+::       Nang Nuitka thi thu bo co nay, chay OCR 1 anh xem con crash khong.
+::   KHONG co --nofollow-import-to: build day du, khong loai goi
+::       nao de toi uu dung luong. Loai sai mot goi la EXE vo luc chay ma build
+::       van bao thanh cong; dung luong khong dang voi rui ro do.
 echo.
 echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
 "%PYTHON_EXE%" -m nuitka main.py ^
@@ -188,6 +183,7 @@ echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
   --include-package=paddle ^
   --include-package=paddleocr ^
   --include-package=paddlex ^
+  --noinclude-custom-mode=paddlex.utils.import_guard:bytecode ^
   --include-package=google.protobuf ^
   --include-package=pydicom ^
   --include-package=pylibjpeg ^
@@ -209,21 +205,7 @@ echo [3/4] Running Nuitka (chuan bi doi 30-90 phut cho lan build dau)...
   --include-distribution-metadata=python-bidi ^
   --include-distribution-metadata=imagesize ^
   --include-distribution-metadata=pypdfium2 ^
-  --include-distribution-metadata=pillow ^
-  --nofollow-import-to=matplotlib ^
-  --nofollow-import-to=scipy ^
-  --nofollow-import-to=IPython ^
-  --nofollow-import-to=notebook ^
-  --nofollow-import-to=pytest ^
-  --nofollow-import-to=networkx ^
-  --nofollow-import-to=hf_xet ^
-  --nofollow-import-to=baidubce ^
-  --nofollow-import-to=fsspec ^
-  --nofollow-import-to=anyio ^
-  --nofollow-import-to=wcwidth ^
-  --noinclude-dlls=cv2/opencv_videoio_ffmpeg* ^
-  --noinclude-data-files=cv2/data/* ^
-  --nofollow-import-to=tkinter.test
+  --include-distribution-metadata=pillow
 
 if errorlevel 1 (
     echo.
