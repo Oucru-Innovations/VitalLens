@@ -62,40 +62,13 @@ class SftpSessionManager:
                 self._backend = None
 
             # TCP connection timeout 15s, kỳ vọng socket.timeout/OSError nếu host unreachable.
-            try:
-                sock = socket.create_connection((host, port), timeout=15.0)
-            except (socket.timeout, OSError) as e:
-                raise ConnectionError(
-                    f"Không thể kết nối tới {host}:{port} (kiểm tra host/port/mạng): {e}"
-                ) from e
-
+            sock = socket.create_connection((host, port), timeout=15.0)
             transport = paramiko.Transport(sock)
             try:
                 # Banner/key-exchange timeout 15s, kỳ vọng SSHException nếu timeout.
-                try:
-                    transport.start_client(timeout=15.0)
-                except paramiko.SSHException as e:
-                    raise ConnectionError(
-                        f"Lỗi handshake SSH với {host}:{port}: {e}"
-                    ) from e
-
-                try:
-                    transport.auth_password(username=username, password=password)
-                except paramiko.AuthenticationException as e:
-                    raise ConnectionError(
-                        f"Sai tên đăng nhập hoặc mật khẩu SFTP cho user '{username}' @ {host}:{port}: {e}"
-                    ) from e
-                except paramiko.SSHException as e:
-                    raise ConnectionError(
-                        f"Xác thực SFTP thất bại cho user '{username}' @ {host}:{port}: {e}"
-                    ) from e
-
-                try:
-                    sftp = paramiko.SFTPClient.from_transport(transport)
-                except Exception as e:
-                    raise ConnectionError(
-                        f"Đăng nhập thành công nhưng không mở được kênh SFTP với {host}:{port}: {e}"
-                    ) from e
+                transport.start_client(timeout=15.0)
+                transport.auth_password(username=username, password=password)
+                sftp = paramiko.SFTPClient.from_transport(transport)
             except Exception:
                 # Đóng transport nếu connect/auth thất bại, tránh rò rỉ socket + thread.
                 transport.close()

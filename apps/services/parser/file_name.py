@@ -7,7 +7,7 @@ tz = timezone(timedelta(hours=7))
 STUDIES = ['24EIb', '24EIc','39EIa','01NVb','01NVc']+\
 	['05EI_Covid19', '05EI_MPox', '05EI_Flu'] +\
 	['24EIB', '39EIA','54EI', '56EI', '47EI', '46EI', '05EI', '28EI', '00EI','24EIC', '08NV','09NV','17EI','39EI','01NVB','55EI', '01NVC','46EI','60EI','66DX', '60EI', '62EI'] +\
-	['13NV', '61EI', '66EI', '55TB', '66EI', '65EI', '00TB', '00EI', '65EI', '69EI']
+	['13NV', '61EI', '66EI', '55TB', '66EI', '65EI', '00TB']
 	
 
 PATTERN = [
@@ -32,27 +32,31 @@ class FileNameParser:
 	def __init__(self, file) -> None:
 		self.file = file
 
-	def parse(self, keys=None):
-		"""Parse the path. If `keys` is given, only compute and return those keys."""
-		need = lambda *names: keys is None or any(k in keys for k in names)
-		datatype = self.get_datatype() if need("datatype", "start", "end", "duration", "filename") else None
-		start = self.get_start_time(datatype) if need("start", "duration") else None
-		end = self.get_end_time(datatype) if need("end", "duration") else None
-		date = self.get_date() if need("date") else None
+	def parse(self):
+		study = self.get_study()
+		patient = self.get_patient()
+		datatype = self.get_datatype()
+		start = self.get_start_time(datatype)
+		end = self.get_end_time(datatype)
+		device = self.get_device()
+		filename = self.get_filename(datatype)
+		duration=(end - start).total_seconds() if end and start else None
+		size = self.get_size()
+		date = self.get_date()
 		parsed_info = {
-			"study": self.get_study() if need("study") else None,
-			"patient": self.get_patient() if need("patient") else None,
+			"study": study,
+			"patient": patient,
 			"datatype": datatype,
 			"start": start.isoformat() if start else None,
 			"end": end.isoformat() if end else None,
 			"date": date.isoformat() if date else None,
-			"device": self.get_device() if need("device") else None,
-			"duration": (end - start).total_seconds() if end and start else None,
-			"filename": self.get_filename(datatype) if need("filename") else None,
-			"size": self.get_size() if need("size") else None,
-			"path": self.file,
+			"device": device,
+			"duration": duration,
+			"filename": filename,
+			"size": size,
+			"path": self.file
 		}
-		return parsed_info if keys is None else {k: parsed_info[k] for k in keys}
+		return parsed_info
 
 	def get_study(self):
 		if self.file.find('Log_')!=-1:
@@ -259,10 +263,6 @@ class FileNameParser:
 	def get_patient(self):
 		file = self.file
 		file = file.replace("01nvc", "01NVc")
-		if re.search(r"13NV", file, re.IGNORECASE):
-			# 13NV must be 13NV-AAA-BBBB-C|V; anything looser is rejected, not guessed
-			m = re.search(r"(?<![A-Za-z0-9])13NV-\d{3}-\d{4}-[CV](?![A-Za-z0-9])", file, re.IGNORECASE)
-			return m.group(0).upper() if m else None
 		patterns = [r"\d+\w+[_-]\d+[_-]\d+[_-][a-zA-Z]",r"\d+\w+[_-]\d+[_-]\d+", r"\d+\w+[_-]\d+[_-]\d+-\d{1,2}"]
 		for p in patterns:
 			matches = re.findall(p, file)
